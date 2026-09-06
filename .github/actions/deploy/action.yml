@@ -38,9 +38,8 @@ runs:
         TITLE="deploy $REPO @ $SHA"
         RUN_ID=""
         for i in $(seq 1 40); do
-          RUN_ID="$(GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/workflows/deploy.yml/runs?per_page=20" \
-            --jq --arg t "$TITLE" --arg s "$START" \
-            '.workflow_runs[] | select(.display_title == $t and .created_at >= $s) | .id' | head -1)"
+          RUN_ID="$(TITLE="$TITLE" START="$START" GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/workflows/deploy.yml/runs?per_page=20" \
+            --jq '.workflow_runs[] | select(.display_title == env.TITLE and .created_at >= env.START) | .id' | head -1)"
           [ -n "$RUN_ID" ] && break
           sleep 15
         done
