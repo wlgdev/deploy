@@ -1,103 +1,164 @@
-# wlgdev/deploy — деплой своих проектов за 5 минут
+# wlgdev/deploy
 
-Деплоит headless-приложения организации (боты, воркеры — всё, что **ничего
-не выставляет наружу**). Ты собираешь образ, пушишь в `ghcr.io`, вызываешь
-экшен — остальное происходит само на прод-сервере. SSH-ключи и хосты тебе
-не нужны, они живут только здесь.
+Централизованная система автоматического деплоя headless-приложений (ботов, фоновых воркеров и сервисов без входящего HTTP-трафика) для организации `wlgdev`.
 
-## Как задеплоить свой проект
+Вам **не требуются** SSH-ключи, адреса или пароли от сервера. Всё, что нужно вашему репозиторию — собрать Docker-образ, отправить его в реестр `ghcr.io` и вызвать готовый Action.
 
-### 0. Что нужно
+---
 
-- Репозиторий в организации `wlgdev`.
-- `docker-compose.yml` (в корне или deeper — укажешь путь).
-- Секрет `DEPLOY_TRIGGER_PAT` (шаг 2, одноразово).
+## Пошаговое руководство (Быстрый старт)
 
-### 1. Приготовь docker-compose
+### Шаг 1. Подготовьте `docker-compose.yml`
 
-Два правила:
+Создайте файл `docker-compose.yml` в корне вашего репозитория.
 
-1. Никакого `build:` — на сервере только готовые образы.
-2. Свои образы — через переменные (конвенция, не требование):
-   `image: ${SERVICE_IMAGE_NAME}:${SERVICE_IMAGE_TAG}`. Сторонние хардкодь,
-   мультисервис — своими переменными.
+Требования к файлу:
+1. **Без локальной сборки**: не используйте блок `build:`. На сервере запускаются только готовые образы из реестра.
+2. **Шаблон имени образа**: используйте переменные `${SERVICE_IMAGE_NAME}:${SERVICE_IMAGE_TAG}` — система деплоя автоматически передаст актуальные значения для dev и prod.
 
-Сборка должна тегать образ коротким sha коммита — деплой подставит его сам,
-ничего передавать не надо. Минимум для сборки:
+Пример минимального `docker-compose.yml`:
 
 ```yaml
-- uses: docker/metadata-action@v5
-  id: meta
-  with:
-    images: ghcr.io/wlgdev/ТВОЙ-проект
-    tags: |
-      type=sha
-      type=raw,value=dev
-- uses: docker/build-push-action@v6
-  with:
-    push: true
-    tags: ${{ steps.meta.outputs.tags }}
+version: '3.8'
+
+services:
+  app:
+    image: ${SERVICE_IMAGE_NAME}:${SERVICE_IMAGE_TAG}
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
 ```
 
-На релизе добавь в `tags` строкой тег релиза — прод-деплой возьмёт его сам.
+---
 
-### 2. Сделай PAT (пошагово, один раз на проект)
+### Шаг 2. Создайте токен доступа (1 раз на проект)
 
-1. Жми на аватар → **Settings** → слева внизу **Developer settings** →
-   **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.
-2. Заполни:
-   - **Token name**: `deploy-trigger-<твой-проект>`
-   - **Expiration**: `1 year` (потом перевыпустишь — см. ротацию ниже)
-   - **Resource owner**: `wlgdev`
-   - **Repository access** → **Only select repositories** → выбери **`deploy`**
-   - **Permissions** → **Repository permissions** → **Actions** → **Read and write**
-3. **Generate token** → скопируй токен (показывается один раз).
-4. Иди в СВОЙ репозиторий → **Settings** → **Secrets and variables** →
-   **Actions** → **New repository secret**:
-   - Name: `DEPLOY_TRIGGER_PAT`, Secret: вставь токен → **Add secret**.
+Для запуска деплоя вашему репозиторию нужен токен с правом вызова пайплайна в `wlgdev/deploy`:
 
-Этот токен умеет только одно — дёргать деплой. Больше ничего.
+1. В правом верхнем углу GitHub нажмите на свой аватар → **Settings**.
+2. В левом меню в самом низу перейдите в **Developer settings**.
+3. Выберите **Personal access tokens** → **Fine-grained tokens** и нажмите **Generate new token**.
+4. Заполните параметры:
+   - **Token name**: `deploy-trigger-<имя-вашего-репозитория>`
+   - **Expiration**: `1 year`
+   - **Resource owner**: выберите организацию `wlgdev`
+   - **Repository access**: выберите **Only select repositories** и отметьте репозиторий **`deploy`**
+   - **Permissions**: раскройте **Repository permissions** → найдите строку **Actions** → выберите **Read and write**
+5. Нажмите **Generate token** и скопируйте сгенерированный токен (начинается на `github_pat_...`).
 
-### 3. Добавь workflow для dev-среды
+---
 
-Файл `.github/workflows/deploy-dev.yml` в своём репо:
+### Шаг 3. Сохраните токен в своём репозитории
+
+1. Откройте свой проект на GitHub.
+2. Перейдите во вкладку **Settings** → слева **Secrets and variables** → **Actions**.
+3. Нажмите кнопку **New repository secret**.
+4. Введите имя: `DEPLOY_TRIGGER_PAT`
+5. В поле **Secret** вставьте скопированный токен и нажмите **Add secret**.
+
+---
+
+### Шаг 4. Настройте пайплайны деплоя
+
+#### Dev-окружение: деплой при пуше в основную ветку
+
+Создайте файл `.github/workflows/deploy-dev.yml` в своём репозитории:
 
 ```yaml
 name: deploy-dev
+
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  deploy-dev:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha
+            type=raw,value=dev
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+  deploy:
+    needs: build-and-push
     runs-on: ubuntu-latest
     steps:
       - uses: wlgdev/deploy/.github/actions/deploy@main
         with:
           pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
+          is_dev: 'true'
 ```
 
-Готово: имя (`ghcr.io/wlgdev/<твой-проект>`) и тег (короткий sha) подставятся
-сами. Свои секреты добавь через `env: |` строками `K=V`:
+При каждом пуше в `main` или `master` сервис будет автоматически развёрнут в изолированном dev-стеке `/data/apps/<имя-проекта>-dev`.
 
-```yaml
-        with:
-          pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
-          env: |
-            МОЯ_ПЕРЕМЕННАЯ=значение
-```
+---
 
-### 4. Добавь workflow для прода (по желанию)
+#### Prod-окружение: деплой при публикации релиза
 
-Файл `.github/workflows/deploy-prod.yml`:
+Создайте файл `.github/workflows/deploy-prod.yml` в своём репозитории:
 
 ```yaml
 name: deploy-prod
+
 on:
   release:
     types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  deploy-prod:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=release
+            type=sha
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+  deploy:
+    needs: build-and-push
     runs-on: ubuntu-latest
     steps:
       - uses: wlgdev/deploy/.github/actions/deploy@main
@@ -106,51 +167,71 @@ jobs:
           is_dev: 'false'
 ```
 
-Тег релиза подставится сам.
+При публикации релиза сервис развернётся в прод-стеке `/data/apps/<имя-проекта>`.
 
-### 5. Запушь и смотри
+---
 
-- Зелёный run в СВОЁМ репо = деплой прошёл целиком: экшен дожидается
-  центрального деплоя и падает вместе с ним, со ссылкой на его лог.
-- Красный — открой лог, там ссылка на упавший центральный run.
-- Ручной перезапуск/откат на старый коммит: Actions этого репо → `deploy` →
-  **Run workflow** (образ с этим коммитом должен существовать в `ghcr.io`).
+### Шаг 5. Передача переменных и секретов
 
-## Входные переменные экшена
+Если приложению требуются токены или параметры конфигурации, передайте их в параметре `env` строками `КЛЮЧ=ЗНАЧЕНИЕ`:
 
-| Переменная | По умолчанию | Что это |
+```yaml
+      - uses: wlgdev/deploy/.github/actions/deploy@main
+        with:
+          pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
+          is_dev: 'true'
+          env: |
+            BOT_TOKEN=${{ secrets.BOT_TOKEN }}
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            LOG_LEVEL=info
+```
+
+*Переменные передаются в процесс запуска и не сохраняются в виде файлов на диске сервера.*
+
+---
+
+## Мониторинг и просмотр логов
+
+- **Зелёный статус** шага в GitHub Actions означает успешный запуск контейнеров на сервере.
+- **Красный статус**: если сборка или запуск упали, в лог шага выводится прямая ссылка на запуск в `wlgdev/deploy`, где можно посмотреть подробный вывод `docker compose`.
+
+---
+
+## Откат на предыдущую версию (Rollback)
+
+Если после деплоя возникла проблема:
+1. Откройте репозиторий `wlgdev/deploy` → вкладка **Actions**.
+2. В левой колонке выберите workflow **deploy**.
+3. Нажмите **Run workflow**:
+   - В поле **repo** укажите `wlgdev/<имя-вашего-проекта>`.
+   - В поле **sha** укажите 40-значный хэш стабильного коммита.
+   - В поле **is_dev** выберите целевое окружение (`false` для прода, `true` для дева).
+4. Нажмите кнопку запуска.
+
+---
+
+## Параметры экшена `wlgdev/deploy/.github/actions/deploy`
+
+| Параметр | По умолчанию | Описание |
 |---|---|---|
-| `pat` | — | всегда `${{ secrets.DEPLOY_TRIGGER_PAT }}` |
-| `docker_compose_path` | `docker-compose.yml` | путь до compose внутри твоего репо, корень по умолчанию |
-| `is_dev` | `'true'` | `'false'` → прод-стек вместо `-dev` |
-| `service_image_name` | `ghcr.io/wlgdev/<твой-проект>` | какой образ тянуть; свой registry — передай явно |
-| `service_image_tag` | короткий sha (на релизе — тег релиза) | какой тег тянуть; переопредели, если тегаешь иначе |
-| `env` | — | строки `K=V`: пробрасываются в `docker compose` в момент запуска, на диске сервера НЕ хранятся (без переводов строк и `#`-комментариев). Явные `service_image_*` важнее строк `SERVICE_IMAGE_*` здесь |
-| `central_ref` | `main` | не трогать |
+| `pat` | *Обязательный* | Секрет `${{ secrets.DEPLOY_TRIGGER_PAT }}` для авторизации |
+| `is_dev` | `'true'` | `'true'` для dev-стека (`<app>-dev`), `'false'` для продакшена (`<app>`) |
+| `docker_compose_path` | `docker-compose.yml` | Путь к файлу compose относительно корня репозитория |
+| `env` | `''` | Переменные окружения вида `KEY=VALUE` (построчно) |
+| `service_image_name` | `ghcr.io/wlgdev/<repo>` | Кастомный адрес реестра образов (если отличается от стандартного) |
+| `service_image_tag` | sha / имя релиза | Кастомный тег образа |
+| `central_ref` | `main` | Ветка репозитория `wlgdev/deploy` |
 
-Версия экшена `@main`; хочешь стабильности — укажи SHA коммита из этого репо.
+---
 
-## Как это работает внутри
+## Для администраторов сервера
 
-1. Твой workflow вызывает экшен → тот шлёт `workflow_dispatch` сюда с
-   параметрами (`repo`, `sha`, остальное).
-2. Центральный run проверяет: репо из `wlgdev`, имя ок, SHA полный,
-   путь без `..`. Чужие репозитории отшиваются здесь.
-3. Раннер выкачивает твой репо ровно на `sha`, копирует compose на сервер в
-   `/data/apps/<проект>` (dev — в `<проект>-dev`), экспортирует переменные
-   и делает `docker compose pull && up -d`.
-4. Твои данные живут в volumes внутри `/data/apps/<проект>` и переживают
-   редеплои.
+### Необходимые секреты в `wlgdev/deploy`:
+- `DEPLOY_SSH_HOST`, `DEPLOY_SSH_PORT`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KEY` — реквизиты SSH пользователя `deploy`.
+- `ORG_READ_PAT` — Classic PAT с областью `repo` для выкачивания приватных репозиториев организации.
+- Переменная `GHCR_USER` — пользователь для GHCR.
 
-## Мейнтейнеру `wlgdev/deploy`
-
-Секреты центра: `DEPLOY_SSH_KEY/HOST/USER/PORT` (ключ юзера `deploy`),
-`ORG_READ_PAT` (classic PAT, скоуп `repo`), variable `GHCR_USER`.
-В проектах — только `DEPLOY_TRIGGER_PAT` (см. шаг 2 выше).
-
-- Сверка сервера: `ssh root@HOST 'bash -s' < scripts/check-server.sh`
-  (для MobaXterm — вставляемый блок в шапке скрипта).
-- Ротация SSH: новый ключ → append паблика → обновить секрет → деплой пилота →
-  убрать старый паблик. Ротация PAT: перегенерить → обновить секрет → редеплой.
-- Публичность репо обязательна: приватный репо ломает `uses:` из других
-  проектов. Секреты этим не раскрываются.
+### Проверка конфигурации сервера:
+```bash
+ssh root@HOST 'bash -s' < scripts/check-server.sh
+```
