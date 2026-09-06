@@ -114,7 +114,10 @@ jobs:
               if len(parts) != 3:
                   sys.exit(f"Invalid target entry: {line}")
               subdomain, service, port = parts
-              host = f"{subdomain}.{domain_suffix}"
+              if "." in subdomain:
+                  host = subdomain
+              else:
+                  host = f"{subdomain}.{domain_suffix}"
               route = f"{app}-{service}"
               services[service] = {
                   "host": host,
@@ -183,5 +186,5 @@ jobs:
             printf '%s' "$ENV_INPUT" | $SSH "$REMOTE" "cat > /data/apps/$APP/.env.tmp && chmod 600 /data/apps/$APP/.env.tmp"
           fi
           echo "📄 compose uploaded → /data/apps/$APP/docker-compose.yml"
-          $SSH "$REMOTE" "cd /data/apps/$APP && rm -f .env && mv docker-compose.yml.new docker-compose.yml && if [ -f docker-compose.override.yml.new ]; then mv docker-compose.override.yml.new docker-compose.override.yml && NET=\"proxy-$APP-network\" && (docker network inspect \"\$NET\" >/dev/null 2>&1 || docker network create \"\$NET\") && (if docker ps --format '{{.Names}}' | grep -qw coolify-proxy; then docker inspect -f '{{json .NetworkSettings.Networks}}' coolify-proxy | grep -qw \"\$NET\" || docker network connect \"\$NET\" coolify-proxy; fi); else rm -f docker-compose.override.yml; fi && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker compose ps"
+          $SSH "$REMOTE" "cd /data/apps/$APP && rm -f .env && mv docker-compose.yml.new docker-compose.yml && if [ -f docker-compose.override.yml.new ]; then mv docker-compose.override.yml.new docker-compose.override.yml && NET=\"proxy-$APP-network\" && (docker network inspect \"\$NET\" >/dev/null 2>&1 || docker network create \"\$NET\") && (if docker ps --format '{{.Names}}' | grep -qw coolify-proxy; then docker inspect -f '{{json .NetworkSettings.Networks}}' coolify-proxy | grep -qw \"\$NET\" || docker network connect \"\$NET\" coolify-proxy; fi); else rm -f docker-compose.override.yml; if docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1; then docker network disconnect \"proxy-$APP-network\" coolify-proxy 2>/dev/null || true; docker network rm \"proxy-$APP-network\" 2>/dev/null || true; fi; fi && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker image prune -a -f --filter \"until=168h\" && docker compose ps"
           echo -e "\033[1;32m✅ $APP is up\033[0m"
