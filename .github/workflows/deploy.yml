@@ -114,10 +114,8 @@ jobs:
               if len(parts) != 3:
                   sys.exit(f"Invalid target entry: {line}")
               subdomain, service, port = parts
-              if "." in subdomain:
-                  host = subdomain
-              else:
-                  host = f"{subdomain}.{domain_suffix}"
+              subdomain = subdomain.removesuffix(".dev.wlg.tv").removesuffix(".wlg.tv")
+              host = f"{subdomain}.{domain_suffix}"
               route = f"{app}-{service}"
               services[service] = {
                   "host": host,
