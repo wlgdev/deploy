@@ -39,15 +39,15 @@ runs:
         RUN_ID=""
         for i in $(seq 1 40); do
           RUN_ID="$(GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/workflows/deploy.yml/runs?per_page=20" \
-            --jq '.workflow_runs[] | "\(.id) \(.created_at) \(.display_title)"' | grep -F " $TITLE" | awk -v s="$START" '$2 >= s {print $1}' | head -1)"
+            --jq '.workflow_runs[] | "\(.id) \(.created_at) \(.display_title)"' 2>/dev/null | grep -F " $TITLE" | awk -v s="$START" '$2 >= s {print $1}' | head -1 || true)"
           if [ -n "$RUN_ID" ]; then echo "found central run $RUN_ID"; break; fi
           echo "waiting for central run to appear... ($i)"
           sleep 15
         done
         [ -n "$RUN_ID" ] || { echo "::error::central deploy run not found within 10m"; exit 1; }
         for i in $(seq 1 40); do
-          RESULT="$(GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/runs/$RUN_ID" --jq '"\(.status)/\(.conclusion)"')"
-          echo "central run $RUN_ID: $RESULT — https://github.com/wlgdev/deploy/actions/runs/$RUN_ID"
+          RESULT="$(GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/runs/$RUN_ID" --jq '"\(.status)/\(.conclusion)"' 2>/dev/null || true)"
+          echo "central run $RUN_ID: ${RESULT:-api-hiccup} — https://github.com/wlgdev/deploy/actions/runs/$RUN_ID"
           case "$RESULT" in
             completed/success) echo "deploy OK"; exit 0;;
             completed/*) echo "::error::central deploy FAILED ($RESULT), logs linked above"; exit 1;;
