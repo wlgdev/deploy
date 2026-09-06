@@ -80,6 +80,7 @@ jobs:
 | `pat` | — | всегда `${{ secrets.DEPLOY_TRIGGER_PAT }}` |
 | `docker_compose_path` | `docker-compose.yml` | если compose не в корне |
 | `is_dev` | `'true'` | `'false'` → прод-стек `<app>` вместо `<app>-dev` |
+| `target` | — | `SUBDOMAIN:SERVICE:PORT` для Traefik (пусто = headless) |
 | `service_image_name` | `ghcr.io/wlgdev/<твой-проект>` | какой образ тянуть; свой registry — передай явно |
 | `service_image_tag` | короткий sha (на релизе — тег релиза) | какой тег тянуть; переопредели, если тегаешь иначе |
 | `env` | — | `K=V` построчно → только на время запуска, на диске не хранятся |

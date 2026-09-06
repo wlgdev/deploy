@@ -25,6 +25,10 @@ inputs:
     required: false
     default: ''
     description: 'KEY=VALUE lines, exported for docker compose at deploy time (not stored on server)'
+  target:
+    required: false
+    default: ''
+    description: 'SUBDOMAIN:SERVICE:PORT lines for Traefik routing (leave empty for headless deploy)'
   central_ref:
     required: false
     default: 'main'
@@ -58,8 +62,8 @@ runs:
         curl -sf -X POST -H "Authorization: Bearer $PAT" -H 'Accept: application/vnd.github+json' \
           "https://api.github.com/repos/wlgdev/deploy/actions/workflows/deploy.yml/dispatches" \
           -d "$(jq -n --arg repo "$REPO" --arg sha "$SHA" --arg compose "$COMPOSE_PATH" \
-                        --arg dev "$IS_DEV" --arg env "$ENV_PAYLOAD" --arg ref "$CENTRAL_REF" \
-                '{ref:$ref,inputs:{repo:$repo, sha:$sha, docker_compose_path:$compose, is_dev:$dev, env:$env}}')"
+                        --arg dev "$IS_DEV" --arg env "$ENV_PAYLOAD" --arg target "$TARGET_IN" --arg ref "$CENTRAL_REF" \
+                '{ref:$ref,inputs:{repo:$repo, sha:$sha, docker_compose_path:$compose, is_dev:$dev, env:$env, target:$target}}')"
         echo -e "🚀 dispatch accepted, waiting for central run: $REPO @ ${SHA:0:7} (is_dev=$IS_DEV)"
         RUN_ID=""
         for i in $(seq 1 40); do
@@ -92,4 +96,5 @@ runs:
         EVENT_NAME: ${{ github.event_name }}
         RELEASE_TAG: ${{ github.event.release.tag_name }}
         ENV_INPUT: ${{ inputs.env }}
+        TARGET_IN: ${{ inputs.target }}
         CENTRAL_REF: ${{ inputs.central_ref }}

@@ -27,6 +27,11 @@ on:
         required: false
         default: ''
         type: string
+      target:
+        description: 'Traefik routing: SUBDOMAIN:SERVICE:PORT lines'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: deploy-${{ inputs.repo }}-${{ inputs.is_dev }}
@@ -42,6 +47,7 @@ jobs:
           SHA: ${{ inputs.sha }}
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           IS_DEV: ${{ inputs.is_dev }}
+          TARGET: ${{ inputs.target }}
         run: |
           set -eu
           case "$REPO" in wlgdev/*) ;; *) echo "::error::repo must be in wlgdev org"; exit 1;; esac
@@ -51,6 +57,23 @@ jobs:
           [ "${#SHA}" -eq 40 ] || { echo "::error::sha must be full 40-char"; exit 1; }
           case "$COMPOSE_PATH" in ''|*..*|/*) echo "::error::bad docker_compose_path"; exit 1;; esac
           case "$IS_DEV" in true|false) ;; *) echo "::error::is_dev must be true/false"; exit 1;; esac
+          if [ -n "$TARGET" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+              [ -z "$line" ] && continue
+              case "$line" in
+                *[!a-zA-Z0-9.:_-]*) echo "::error::bad characters in target: $line"; exit 1 ;;
+              esac
+              IFS=':' read -r t_domain t_service t_port extra <<< "$line"
+              [ -n "$extra" ] && { echo "::error::target must have format SUBDOMAIN:SERVICE:PORT"; exit 1; }
+              [ -n "$t_domain" ] && [ -n "$t_service" ] && [ -n "$t_port" ] || { echo "::error::invalid target line: $line"; exit 1; }
+              case "$t_domain" in *[!a-zA-Z0-9.-]*|'') echo "::error::bad subdomain in target: $t_domain"; exit 1 ;; esac
+              case "$t_service" in *[!a-zA-Z0-9_-]*|'') echo "::error::bad service name in target: $t_service"; exit 1 ;; esac
+              case "$t_port" in *[!0-9]*|'') echo "::error::port must be numeric: $t_port"; exit 1 ;; esac
+              if [ "$t_port" -lt 1 ] || [ "$t_port" -gt 65535 ]; then
+                echo "::error::port out of range: $t_port"; exit 1
+              fi
+            done <<< "$TARGET"
+          fi
           [ "$IS_DEV" = "true" ] && APP="$APP-dev"
           echo "APP=$APP" >> "$GITHUB_ENV"
           echo -e "\033[1;32m✅ inputs OK → stack: $APP, commit: ${SHA:0:7}\033[0m"
@@ -61,6 +84,76 @@ jobs:
           ref: ${{ inputs.sha }}
           token: ${{ secrets.ORG_READ_PAT }}
           path: app
+
+      - name: 🌐 Generate Traefik override
+        if: ${{ inputs.target != '' }}
+        env:
+          APP: ${{ env.APP }}
+          IS_DEV: ${{ inputs.is_dev }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -eu
+          python3 - << 'EOF'
+          import os, sys
+
+          target = os.environ.get("TARGET", "").strip()
+          if not target:
+              sys.exit(0)
+
+          app = os.environ["APP"]
+          is_dev = os.environ.get("IS_DEV") == "true"
+          domain_suffix = "dev.wlg.tv" if is_dev else "wlg.tv"
+          network_name = f"proxy-{app}-network"
+
+          services = {}
+          for line in target.splitlines():
+              line = line.strip()
+              if not line:
+                  continue
+              parts = line.split(":")
+              if len(parts) != 3:
+                  sys.exit(f"Invalid target entry: {line}")
+              subdomain, service, port = parts
+              host = f"{subdomain}.{domain_suffix}"
+              route = f"{app}-{service}"
+              services[service] = {
+                  "host": host,
+                  "route": route,
+                  "port": port,
+              }
+
+          lines = [
+              "networks:",
+              f"  {network_name}:",
+              "    external: true",
+              "services:",
+          ]
+
+          for service_name, cfg in services.items():
+              route = cfg["route"]
+              port = cfg["port"]
+              host = cfg["host"]
+              lines.extend([
+                  f"  {service_name}:",
+                  "    networks:",
+                  "      - default",
+                  f"      - {network_name}",
+                  "    labels:",
+                  "      - \"traefik.enable=true\"",
+                  f"      - \"traefik.http.services.{route}.loadbalancer.server.port={port}\"",
+                  f"      - \"traefik.http.routers.{route}.rule=Host(`{host}`)\"",
+                  f"      - \"traefik.http.routers.{route}.tls=true\"",
+                  f"      - \"traefik.http.routers.{route}.tls.certresolver=letsencrypt\"",
+                  f"      - \"traefik.http.routers.{route}.entrypoints=websecure\"",
+                  f"      - \"traefik.http.routers.{route}.middlewares=redirect-to-https\"",
+                  "      - \"traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https\"",
+                  f"      - \"traefik.docker.network={network_name}\"",
+              ])
+
+          with open("docker-compose.override.yml", "w", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+          EOF
+          echo "📄 docker-compose.override.yml generated"
 
       - name: 🚀 Deploy stack over SSH
         env:
@@ -78,16 +171,17 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           : "${SSH_USER:=deploy}"
           : "${SSH_PORT:=22}"
-          # ponytail: TOFU via ssh-keyscan; pin known_hosts as a secret if MITM on first connect matters
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
           SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=yes"
           REMOTE="$SSH_USER@$SSH_HOST"
           $SSH "$REMOTE" "mkdir -p /data/apps/$APP"
           scp -P "$SSH_PORT" -i ~/.ssh/deploy_key "app/$COMPOSE_PATH" "$REMOTE:/data/apps/$APP/docker-compose.yml.new"
+          if [ -f "docker-compose.override.yml" ]; then
+            scp -P "$SSH_PORT" -i ~/.ssh/deploy_key "docker-compose.override.yml" "$REMOTE:/data/apps/$APP/docker-compose.override.yml.new"
+          fi
           if [ -n "$ENV_INPUT" ]; then
             printf '%s' "$ENV_INPUT" | $SSH "$REMOTE" "cat > /data/apps/$APP/.env.tmp && chmod 600 /data/apps/$APP/.env.tmp"
           fi
-          # ponytail: secrets live only in this session env, never on disk (values must not contain newlines)
           echo "📄 compose uploaded → /data/apps/$APP/docker-compose.yml"
-          $SSH "$REMOTE" "cd /data/apps/$APP && rm -f .env && mv docker-compose.yml.new docker-compose.yml && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker compose ps"
+          $SSH "$REMOTE" "cd /data/apps/$APP && rm -f .env && mv docker-compose.yml.new docker-compose.yml && if [ -f docker-compose.override.yml.new ]; then mv docker-compose.override.yml.new docker-compose.override.yml && NET=\"proxy-$APP-network\" && (docker network inspect \"\$NET\" >/dev/null 2>&1 || docker network create \"\$NET\") && (if docker ps --format '{{.Names}}' | grep -qw coolify-proxy; then docker inspect -f '{{json .NetworkSettings.Networks}}' coolify-proxy | grep -qw \"\$NET\" || docker network connect \"\$NET\" coolify-proxy; fi); else rm -f docker-compose.override.yml; fi && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker compose ps"
           echo -e "\033[1;32m✅ $APP is up\033[0m"
