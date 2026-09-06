@@ -36,7 +36,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate inputs
+      - name: 🔍 Validate inputs
         env:
           REPO: ${{ inputs.repo }}
           SHA: ${{ inputs.sha }}
@@ -53,6 +53,7 @@ jobs:
           case "$IS_DEV" in true|false) ;; *) echo "::error::is_dev must be true/false"; exit 1;; esac
           [ "$IS_DEV" = "true" ] && APP="$APP-dev"
           echo "APP=$APP" >> "$GITHUB_ENV"
+          echo -e "\033[1;32m✅ inputs OK → stack: $APP, commit: ${SHA:0:7}\033[0m"
 
       - uses: actions/checkout@v4
         with:
@@ -61,7 +62,7 @@ jobs:
           token: ${{ secrets.ORG_READ_PAT }}
           path: app
 
-      - name: Deploy stack over SSH
+      - name: 🚀 Deploy stack over SSH
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
@@ -87,4 +88,6 @@ jobs:
             printf '%s' "$ENV_INPUT" | $SSH "$REMOTE" "cat > /data/apps/$APP/.env.tmp && chmod 600 /data/apps/$APP/.env.tmp"
           fi
           # ponytail: secrets live only in this session env, never on disk (values must not contain newlines)
+          echo "📄 compose uploaded → /data/apps/$APP/docker-compose.yml"
           $SSH "$REMOTE" "cd /data/apps/$APP && rm -f .env && mv docker-compose.yml.new docker-compose.yml && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker compose ps"
+          echo -e "\033[1;32m✅ $APP is up\033[0m"

@@ -18,13 +18,28 @@
 Два правила:
 
 1. Никакого `build:` — на сервере только готовые образы.
-2. Координаты образа — через переменные:
-   `image: ${SERVICE_IMAGE_NAME}:${SERVICE_IMAGE_TAG}`.
+2. Свои образы — через переменные (конвенция, не требование):
+   `image: ${SERVICE_IMAGE_NAME}:${SERVICE_IMAGE_TAG}`. Сторонние хардкодь,
+   мультисервис — своими переменными.
 
-Образы пушь по конвенции (тогда ничего лишнего передавать не надо):
+Сборка должна тегать образ коротким sha коммита — деплой подставит его сам,
+ничего передавать не надо. Минимум для сборки:
 
-- push в `main`/`master` → тег `dev`: `ghcr.io/wlgdev/<твой-проект>:dev`
-- published release `v1.2.3` → тег релиза: `ghcr.io/wlgdev/<твой-проект>:v1.2.3`
+```yaml
+- uses: docker/metadata-action@v5
+  id: meta
+  with:
+    images: ghcr.io/wlgdev/ТВОЙ-проект
+    tags: |
+      type=sha
+      type=raw,value=dev
+- uses: docker/build-push-action@v6
+  with:
+    push: true
+    tags: ${{ steps.meta.outputs.tags }}
+```
+
+На релизе добавь в `tags` строкой тег релиза — прод-деплой возьмёт его сам.
 
 ### 2. Сделай PAT (пошагово, один раз на проект)
 
@@ -60,13 +75,17 @@ jobs:
       - uses: wlgdev/deploy/.github/actions/deploy@main
         with:
           pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
-          env: |
-            SERVICE_IMAGE_NAME=ghcr.io/wlgdev/ЗАМЕНИ-на-свой-проект
-            SERVICE_IMAGE_TAG=dev
-            МОЯ_ПЕРЕМЕННАЯ=значение
 ```
 
-Замени `ЗАМЕНИ-на-свой-проект` на имя своего репозитория. Готово.
+Готово: имя (`ghcr.io/wlgdev/<твой-проект>`) и тег (короткий sha) подставятся
+сами. Свои секреты добавь через `env: |` строками `K=V`:
+
+```yaml
+        with:
+          pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
+          env: |
+            МОЯ_ПЕРЕМЕННАЯ=значение
+```
 
 ### 4. Добавь workflow для прода (по желанию)
 
@@ -85,10 +104,9 @@ jobs:
         with:
           pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
           is_dev: 'false'
-          env: |
-            SERVICE_IMAGE_NAME=ghcr.io/wlgdev/ЗАМЕНИ-на-свой-проект
-            SERVICE_IMAGE_TAG=${{ github.event.release.tag_name }}
 ```
+
+Тег релиза подставится сам.
 
 ### 5. Запушь и смотри
 
@@ -105,7 +123,9 @@ jobs:
 | `pat` | — | всегда `${{ secrets.DEPLOY_TRIGGER_PAT }}` |
 | `docker_compose_path` | `docker-compose.yml` | путь до compose внутри твоего репо, корень по умолчанию |
 | `is_dev` | `'true'` | `'false'` → прод-стек вместо `-dev` |
-| `env` | — | строки `K=V`: пробрасываются в `docker compose` в момент запуска, на диске сервера НЕ хранятся (без переводов строк и `#`-комментариев) |
+| `service_image_name` | `ghcr.io/wlgdev/<твой-проект>` | какой образ тянуть; свой registry — передай явно |
+| `service_image_tag` | короткий sha (на релизе — тег релиза) | какой тег тянуть; переопредели, если тегаешь иначе |
+| `env` | — | строки `K=V`: пробрасываются в `docker compose` в момент запуска, на диске сервера НЕ хранятся (без переводов строк и `#`-комментариев). Явные `service_image_*` важнее строк `SERVICE_IMAGE_*` здесь |
 | `central_ref` | `main` | не трогать |
 
 Версия экшена `@main`; хочешь стабильности — укажи SHA коммита из этого репо.

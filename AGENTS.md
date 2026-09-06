@@ -6,11 +6,28 @@
 ## Требования
 
 1. Репозиторий в `wlgdev`, `docker-compose.yml` в корне (или свой путь).
-2. Compose ссылается ТОЛЬКО на собранные образы (никакого `build:` на сервере),
-   координаты — через переменные: `image: ${SERVICE_IMAGE_NAME}:${SERVICE_IMAGE_TAG}`.
-3. Образы пушатся по конвенции:
-   - push в `main`/`master` → тег `dev`: `ghcr.io/wlgdev/<app>:dev`
-   - published release `vX.Y.Z` → тег релиза: `ghcr.io/wlgdev/<app>:vX.Y.Z`
+2. Compose ссылается ТОЛЬКО на собранные образы (никакого `build:` на сервере).
+   Конвенция для своих образов (не обязаловка): `image: ${SERVICE_IMAGE_NAME}:${SERVICE_IMAGE_TAG}` —
+   один файл едет и в dev, и в прод, а образы там разные. Имя и тег подставятся сами
+   (см. таблицу), хочешь другое — передай `service_image_name` / `service_image_tag`.
+   Сторонние образы хардкодь как есть (`image: postgres:16`),
+   мультисервис — своими переменными на сервис.
+3. Сборка тегает образ коротким sha коммита (деплой подставит его сам).
+   Минимум для сборки:
+   ```yaml
+   - uses: docker/metadata-action@v5
+     id: meta
+     with:
+       images: ghcr.io/wlgdev/ТВОЙ-проект
+       tags: |
+         type=sha
+         type=raw,value=dev
+   - uses: docker/build-push-action@v6
+     with:
+       push: true
+       tags: ${{ steps.meta.outputs.tags }}
+   ```
+   На релизе добавь в `tags` строкой тег релиза — прод-деплой возьмёт его сам.
 4. Секрет `DEPLOY_TRIGGER_PAT` в настройках репо (выдаёт мейнтейнер `wlgdev/deploy`).
 
 ## Дев: push → стек `<app>-dev`
@@ -30,10 +47,10 @@ jobs:
       - uses: wlgdev/deploy/.github/actions/deploy@main
         with:
           pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
-          env: |
-            SERVICE_IMAGE_NAME=ghcr.io/wlgdev/ЗАМЕНИ-app
-            SERVICE_IMAGE_TAG=dev
 ```
+
+Имя (`ghcr.io/wlgdev/<твой-проект>`) и тег (короткий sha) подставятся сами.
+Свои секреты — через `env: |` строками `K=V`.
 
 ## Прод: published release → стек `<app>`
 
@@ -52,10 +69,9 @@ jobs:
         with:
           pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
           is_dev: 'false'
-          env: |
-            SERVICE_IMAGE_NAME=ghcr.io/wlgdev/ЗАМЕНИ-app
-            SERVICE_IMAGE_TAG=${{ github.event.release.tag_name }}
 ```
+
+Тег релиза подставится сам.
 
 ## Параметры экшена
 
@@ -64,6 +80,8 @@ jobs:
 | `pat` | — | всегда `${{ secrets.DEPLOY_TRIGGER_PAT }}` |
 | `docker_compose_path` | `docker-compose.yml` | если compose не в корне |
 | `is_dev` | `'true'` | `'false'` → прод-стек `<app>` вместо `<app>-dev` |
+| `service_image_name` | `ghcr.io/wlgdev/<твой-проект>` | какой образ тянуть; свой registry — передай явно |
+| `service_image_tag` | короткий sha (на релизе — тег релиза) | какой тег тянуть; переопредели, если тегаешь иначе |
 | `env` | — | `K=V` построчно → только на время запуска, на диске не хранятся |
 | `central_ref` | `main` | не трогать |
 
