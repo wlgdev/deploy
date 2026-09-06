@@ -13,13 +13,14 @@
 Создайте файл `docker-compose.yml` в корне вашего репозитория.
 
 Требования к файлу:
+
 1. **Без локальной сборки**: не используйте блок `build:`. На сервере запускаются только готовые образы из реестра.
 2. **Шаблон имени образа**: используйте переменные `${SERVICE_IMAGE_NAME}:${SERVICE_IMAGE_TAG}` — система деплоя автоматически передаст актуальные значения для dev и prod.
 
 Пример минимального `docker-compose.yml`:
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   app:
@@ -80,7 +81,7 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: docker/login-action@v3
         with:
@@ -109,7 +110,7 @@ jobs:
       - uses: wlgdev/deploy/.github/actions/deploy@main
         with:
           pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
-          is_dev: 'true'
+          is_dev: "true"
 ```
 
 При каждом пуше в `main` или `master` сервис будет автоматически развёрнут в изолированном dev-стеке `/data/apps/<имя-проекта>-dev`.
@@ -164,7 +165,7 @@ jobs:
       - uses: wlgdev/deploy/.github/actions/deploy@main
         with:
           pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
-          is_dev: 'false'
+          is_dev: "false"
 ```
 
 При публикации релиза сервис развернётся в прод-стеке `/data/apps/<имя-проекта>`.
@@ -176,39 +177,40 @@ jobs:
 Если приложению требуются токены или параметры конфигурации, передайте их в параметре `env` строками `КЛЮЧ=ЗНАЧЕНИЕ`:
 
 ```yaml
-      - uses: wlgdev/deploy/.github/actions/deploy@main
-        with:
-          pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
-          is_dev: 'true'
-          env: |
-            BOT_TOKEN=${{ secrets.BOT_TOKEN }}
-            DATABASE_URL=${{ secrets.DATABASE_URL }}
-            LOG_LEVEL=info
+- uses: wlgdev/deploy/.github/actions/deploy@main
+  with:
+    pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
+    is_dev: "true"
+    env: |
+      BOT_TOKEN=${{ secrets.BOT_TOKEN }}
+      DATABASE_URL=${{ secrets.DATABASE_URL }}
+      LOG_LEVEL=info
 ```
 
-*Переменные передаются в процесс запуска и не сохраняются в виде файлов на диске сервера.*
+_Переменные передаются в процесс запуска и не сохраняются в виде файлов на диске сервера._
 
 ---
 
 ### Шаг 6. Деплой веб-сервисов на внешний поддомен (Traefik)
 
 Если вашему приложению нужен доступ из интернета по HTTPS (веб-сайт, API, вебхук):
+
 1. Добавьте параметр `target`:
    ```yaml
-         - uses: wlgdev/deploy/.github/actions/deploy@main
-           with:
-             pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
-             is_dev: 'true'
-             target: 'mybot:app:8080'
+   - uses: wlgdev/deploy/.github/actions/deploy@main
+     with:
+       pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
+       is_dev: "true"
+       target: "mybot:app:8080"
    ```
 2. Формат параметра: `ПОДДОМЕН:СЕРВИС:ПОРТ`
    - Для **Dev-стека** (`is_dev: 'true'`): адрес `https://<поддомен>.dev.wlg.tv`
    - Для **Prod-стека** (`is_dev: 'false'`): адрес `https://<поддомен>.wlg.tv`
    - Для нескольких сервисов укажите строки построчно:
      ```yaml
-             target: |
-               api:backend:3000
-               app:frontend:80
+     target: |
+       api:backend:3000
+       app:frontend:80
      ```
 3. SSL-сертификаты выпускаются автоматически через Let's Encrypt.
 4. Если параметр `target` **не указан**, проект деплоится в стандартном headless-режиме (без проксирования и внешних сетей).
@@ -225,6 +227,7 @@ jobs:
 ## Откат на предыдущую версию (Rollback)
 
 Если после деплоя возникла проблема:
+
 1. Откройте репозиторий `wlgdev/deploy` → вкладка **Actions**.
 2. В левой колонке выберите workflow **deploy**.
 3. Нажмите **Run workflow**:
@@ -237,27 +240,29 @@ jobs:
 
 ## Параметры экшена `wlgdev/deploy/.github/actions/deploy`
 
-| Параметр | По умолчанию | Описание |
-|---|---|---|
-| `pat` | *Обязательный* | Секрет `${{ secrets.DEPLOY_TRIGGER_PAT }}` для авторизации |
-| `is_dev` | `'true'` | `'true'` для dev-стека (`<app>-dev`), `'false'` для продакшена (`<app>`) |
-| `target` | `''` | `ПОДДОМЕН:СЕРВИС:ПОРТ` для Traefik HTTPS-роутинга (пусто = headless) |
-| `docker_compose_path` | `docker-compose.yml` | Путь к файлу compose относительно корня репозитория |
-| `env` | `''` | Переменные окружения вида `KEY=VALUE` (построчно) |
-| `service_image_name` | `ghcr.io/wlgdev/<repo>` | Кастомный адрес реестра образов (если отличается от стандартного) |
-| `service_image_tag` | sha / имя релиза | Кастомный тег образа |
-| `central_ref` | `main` | Ветка репозитория `wlgdev/deploy` |
+| Параметр              | По умолчанию            | Описание                                                                 |
+| --------------------- | ----------------------- | ------------------------------------------------------------------------ |
+| `pat`                 | _Обязательный_          | Секрет `${{ secrets.DEPLOY_TRIGGER_PAT }}` для авторизации               |
+| `is_dev`              | `'true'`                | `'true'` для dev-стека (`<app>-dev`), `'false'` для продакшена (`<app>`) |
+| `target`              | `''`                    | `ПОДДОМЕН:СЕРВИС:ПОРТ` для Traefik HTTPS-роутинга (пусто = headless)     |
+| `docker_compose_path` | `docker-compose.yml`    | Путь к файлу compose относительно корня репозитория                      |
+| `env`                 | `''`                    | Переменные окружения вида `KEY=VALUE` (построчно)                        |
+| `service_image_name`  | `ghcr.io/wlgdev/<repo>` | Кастомный адрес реестра образов (если отличается от стандартного)        |
+| `service_image_tag`   | sha / имя релиза        | Кастомный тег образа                                                     |
+| `central_ref`         | `main`                  | Ветка репозитория `wlgdev/deploy`                                        |
 
 ---
 
 ## Для администраторов сервера
 
 ### Необходимые секреты в `wlgdev/deploy`:
+
 - `DEPLOY_SSH_HOST`, `DEPLOY_SSH_PORT`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KEY` — реквизиты SSH пользователя `deploy`.
 - `ORG_READ_PAT` — Classic PAT с областью `repo` для выкачивания приватных репозиториев организации.
 - Переменная `GHCR_USER` — пользователь для GHCR.
 
 ### Проверка конфигурации сервера:
+
 ```bash
 ssh root@HOST 'bash -s' < scripts/check-server.sh
 ```

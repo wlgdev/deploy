@@ -78,7 +78,7 @@ jobs:
           echo "APP=$APP" >> "$GITHUB_ENV"
           echo -e "\033[1;32m✅ inputs OK → stack: $APP, commit: ${SHA:0:7}\033[0m"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.sha }}
