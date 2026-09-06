@@ -1,61 +1,76 @@
 # Деплой проекта через wlgdev/deploy (v1: headless, без трафика извне)
 
-> Этот файл — для тебя и твоего агента. Деплой = собрать образ, запушить в
-> `ghcr.io`, дёрнуть центральный workflow. SSH-ключи и хосты тебе не нужны.
+> Деплой = собрать образ, запушить в `ghcr.io`, вызвать экшен ниже.
+> SSH-ключи и хосты тебе не нужны.
 
 ## Требования
 
 1. Репозиторий в `wlgdev`, `docker-compose.yml` в корне (или свой путь).
 2. Compose ссылается ТОЛЬКО на собранные образы (никакого `build:` на сервере),
    координаты — через переменные: `image: ${SERVICE_IMAGE_NAME}:${SERVICE_IMAGE_TAG}`.
-3. Образы пушатся по конвенции (тогда в deploy-джобе не нужны outputs сборки):
-   - push в `master` → тег `dev`: `ghcr.io/wlgdev/<app>:dev`
+3. Образы пушатся по конвенции:
+   - push в `main`/`master` → тег `dev`: `ghcr.io/wlgdev/<app>:dev`
    - published release `vX.Y.Z` → тег релиза: `ghcr.io/wlgdev/<app>:vX.Y.Z`
 4. Секрет `DEPLOY_TRIGGER_PAT` в настройках репо (выдаёт мейнтейнер `wlgdev/deploy`).
 
-## Дев: push в master → стек `<app>-dev`
+## Дев: push → стек `<app>-dev`
+
+`.github/workflows/deploy-dev.yml`:
 
 ```yaml
+name: deploy-dev
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+jobs:
   deploy-dev:
-    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
-      - run: |
-          APP="${REPO#wlgdev/}"
-          curl -sf -X POST -H "Authorization: Bearer $PAT" -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/wlgdev/deploy/actions/workflows/deploy.yml/dispatches" \
-            -d "$(jq -n --arg repo "$REPO" --arg sha "$SHA" --arg app "$APP" \
-              '{ref:"main",inputs:{repo:$repo, sha:$sha, is_dev:"true",
-                compose_path:"docker-compose.yml",
-                env:(["SERVICE_IMAGE_NAME=ghcr.io/wlgdev/"+$app,
-                      "SERVICE_IMAGE_TAG=dev"] | join("\n"))}}')"
-        env:
-          PAT: ${{ secrets.DEPLOY_TRIGGER_PAT }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
+      - uses: wlgdev/deploy/.github/actions/deploy@main
+        with:
+          trigger_pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
+          env: |
+            SERVICE_IMAGE_NAME=ghcr.io/wlgdev/ЗАМЕНИ-app
+            SERVICE_IMAGE_TAG=dev
 ```
 
 ## Прод: published release → стек `<app>`
 
-Тот же джоб, триггер `on: {release: {types: [published]}}`, `is_dev:"false"`,
-`SERVICE_IMAGE_TAG` = имя релиза: добавь `--arg tag "$TAG"` с
-`TAG: ${{ github.event.release.tag_name }}` в env. Дев-стек не трогается.
-Порядок не важен, но обычно добавляют `needs: [docker]`, чтобы диспатч уходил
-после успешного пуша образа.
+`.github/workflows/deploy-prod.yml`:
 
-## Параметры
+```yaml
+name: deploy-prod
+on:
+  release:
+    types: [published]
+jobs:
+  deploy-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: wlgdev/deploy/.github/actions/deploy@main
+        with:
+          trigger_pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
+          is_dev: 'false'
+          env: |
+            SERVICE_IMAGE_NAME=ghcr.io/wlgdev/ЗАМЕНИ-app
+            SERVICE_IMAGE_TAG=${{ github.event.release.tag_name }}
+```
 
-| Input | Пример |
-|---|---|
-| `repo` | всегда `${{ github.repository }}` |
-| `sha` | всегда `${{ github.sha }}` (релиз: тоже sha коммита релиза) |
-| `is_dev` | `true` → `/data/apps/<app>-dev`, `false` → `/data/apps/<app>` |
-| `env` | `K=V` построчно → пишется в `.env` (chmod 600) рядом с compose |
-| `compose_path` | если compose не в корне |
+## Параметры экшена
+
+| Input | Default | Что это |
+|---|---|---|
+| `trigger_pat` | — | всегда `${{ secrets.DEPLOY_TRIGGER_PAT }}` |
+| `compose_path` | `docker-compose.yml` | если compose не в корне |
+| `is_dev` | `'true'` | `'false'` → прод-стек `<app>` вместо `<app>-dev` |
+| `env` | — | `K=V` построчно → `.env` (chmod 600) рядом с compose |
+| `central_ref` | `main` | не трогать |
 
 ## Правила
 
-- Данные живут в volumes внутри `/data/apps/<app>` — переживают редеплои.
+- Данные в volumes внутри `/data/apps/<app>` переживают редеплои.
 - Откат = ручной Run workflow в `wlgdev/deploy` со старым `sha`
   (образ с этим SHA должен существовать).
-- Упал деплой — лог run'а в `wlgdev/deploy` → Actions; твой репо там только inputs.
+- Упал деплой — лог run'а в `wlgdev/deploy` → Actions.
+- Версия экшена `@main`; хочешь пин — укажи SHA коммита из `wlgdev/deploy`.
