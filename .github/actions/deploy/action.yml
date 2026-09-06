@@ -1,10 +1,10 @@
 name: deploy to wlgdev server
-description: Triggers a headless deploy in wlgdev/deploy. Caller repo needs DEPLOY_TRIGGER_PAT secret (fine-grained PAT, Actions:write on wlgdev/deploy).
+description: Triggers a headless deploy in wlgdev/deploy. Caller repo needs DEPLOY_TRIGGER_PAT secret (fine-grained PAT, Actions write on wlgdev/deploy).
 
 inputs:
   trigger_pat:
     required: true
-    description: 'Pass ${{ secrets.DEPLOY_TRIGGER_PAT }}'
+    description: 'Pass the caller-repo DEPLOY_TRIGGER_PAT secret'
   compose_path:
     required: false
     default: 'docker-compose.yml'
