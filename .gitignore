@@ -1,0 +1,5 @@
+PLAN.md
+*.key
+*.pub
+*.token
+.env

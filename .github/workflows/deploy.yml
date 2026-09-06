@@ -1,0 +1,88 @@
+name: deploy
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Source repo, e.g. wlgdev/mybot'
+        required: true
+        type: string
+      sha:
+        description: 'Full 40-char commit SHA to deploy'
+        required: true
+        type: string
+      compose_path:
+        description: 'Compose file path inside the source repo'
+        required: false
+        default: 'docker-compose.yml'
+        type: string
+      is_dev:
+        description: 'true = separate -dev stack, false = prod stack'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+      env:
+        description: 'Extra KEY=VALUE lines, written to .env next to compose'
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: deploy-${{ inputs.repo }}-${{ inputs.is_dev }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        env:
+          REPO: ${{ inputs.repo }}
+          SHA: ${{ inputs.sha }}
+          COMPOSE_PATH: ${{ inputs.compose_path }}
+          IS_DEV: ${{ inputs.is_dev }}
+        run: |
+          set -eu
+          case "$REPO" in wlgdev/*) ;; *) echo "::error::repo must be in wlgdev org"; exit 1;; esac
+          APP="${REPO#wlgdev/}"
+          case "$APP" in ''|*[!a-z0-9-]*) echo "::error::bad app name"; exit 1;; esac
+          case "$SHA" in *[!0-9a-f]*|'') echo "::error::sha must be hex"; exit 1;; esac
+          [ "${#SHA}" -eq 40 ] || { echo "::error::sha must be full 40-char"; exit 1; }
+          case "$COMPOSE_PATH" in ''|*..*|/*) echo "::error::bad compose_path"; exit 1;; esac
+          case "$IS_DEV" in true|false) ;; *) echo "::error::is_dev must be true/false"; exit 1;; esac
+          [ "$IS_DEV" = "true" ] && APP="$APP-dev"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repo }}
+          ref: ${{ inputs.sha }}
+          token: ${{ secrets.ORG_READ_PAT }}
+          path: app
+
+      - name: Deploy stack over SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          COMPOSE_PATH: ${{ inputs.compose_path }}
+          ENV_INPUT: ${{ inputs.env }}
+        run: |
+          set -eu
+          test -f "app/$COMPOSE_PATH" || { echo "::error::compose not found: $COMPOSE_PATH"; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          : "${SSH_USER:=deploy}"
+          : "${SSH_PORT:=22}"
+          # ponytail: TOFU via ssh-keyscan; pin known_hosts as a secret if MITM on first connect matters
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=yes"
+          REMOTE="$SSH_USER@$SSH_HOST"
+          $SSH "$REMOTE" "mkdir -p /opt/apps/$APP"
+          scp -P "$SSH_PORT" -i ~/.ssh/deploy_key "app/$COMPOSE_PATH" "$REMOTE:/opt/apps/$APP/docker-compose.yml.new"
+          if [ -n "$ENV_INPUT" ]; then
+            printf '%s' "$ENV_INPUT" | $SSH "$REMOTE" "cat > /opt/apps/$APP/.env && chmod 600 /opt/apps/$APP/.env"
+          fi
+          $SSH "$REMOTE" "cd /opt/apps/$APP && mv docker-compose.yml.new docker-compose.yml && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker compose ps"
