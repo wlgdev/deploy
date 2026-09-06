@@ -1,14 +1,14 @@
 name: deploy to wlgdev server
-description: Triggers a headless deploy in wlgdev/deploy. Caller repo needs DEPLOY_TRIGGER_PAT secret (fine-grained PAT, Actions write on wlgdev/deploy).
+description: Triggers a headless deploy in wlgdev/deploy and waits for its result. Caller repo needs DEPLOY_TRIGGER_PAT secret (fine-grained PAT, Actions write on wlgdev/deploy).
 
 inputs:
-  trigger_pat:
+  pat:
     required: true
     description: 'Pass the caller-repo DEPLOY_TRIGGER_PAT secret'
-  compose_path:
+  docker_compose_path:
     required: false
     default: 'docker-compose.yml'
-    description: 'Compose file path in the caller repo'
+    description: 'Compose file path in the caller repo (repo root by default)'
   is_dev:
     required: false
     default: 'true'
@@ -16,7 +16,7 @@ inputs:
   env:
     required: false
     default: ''
-    description: 'KEY=VALUE lines, written to .env next to compose on server'
+    description: 'KEY=VALUE lines, exported for docker compose at deploy time (not stored on server)'
   central_ref:
     required: false
     default: 'main'
@@ -32,14 +32,35 @@ runs:
           "https://api.github.com/repos/wlgdev/deploy/actions/workflows/deploy.yml/dispatches" \
           -d "$(jq -n --arg repo "$REPO" --arg sha "$SHA" --arg compose "$COMPOSE_PATH" \
                         --arg dev "$IS_DEV" --arg env "$ENV_INPUT" --arg ref "$CENTRAL_REF" \
-                '{ref:$ref,inputs:{repo:$repo, sha:$sha, compose_path:$compose, is_dev:$dev, env:$env}}')"
-        echo "dispatch sent: $REPO @ ${SHA:0:7} (is_dev=$IS_DEV)"
+                '{ref:$ref,inputs:{repo:$repo, sha:$sha, docker_compose_path:$compose, is_dev:$dev, env:$env}}')"
+        echo "dispatch accepted, waiting for central run: $REPO @ ${SHA:0:7} (is_dev=$IS_DEV)"
+        START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        TITLE="deploy $REPO @ $SHA"
+        RUN_ID=""
+        for i in $(seq 1 40); do
+          RUN_ID="$(GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/workflows/deploy.yml/runs?per_page=20" \
+            --jq --arg t "$TITLE" --arg s "$START" \
+            '.workflow_runs[] | select(.display_title == $t and .created_at >= $s) | .id' | head -1)"
+          [ -n "$RUN_ID" ] && break
+          sleep 15
+        done
+        [ -n "$RUN_ID" ] || { echo "::error::central deploy run not found within 10m"; exit 1; }
+        for i in $(seq 1 40); do
+          RESULT="$(GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/runs/$RUN_ID" --jq '"\(.status)/\(.conclusion)"')"
+          echo "central run $RUN_ID: $RESULT — https://github.com/wlgdev/deploy/actions/runs/$RUN_ID"
+          case "$RESULT" in
+            completed/success) echo "deploy OK"; exit 0;;
+            completed/*) echo "::error::central deploy FAILED ($RESULT), logs linked above"; exit 1;;
+          esac
+          sleep 15
+        done
+        echo "::error::timed out waiting for central deploy"; exit 1
       shell: bash
       env:
-        PAT: ${{ inputs.trigger_pat }}
+        PAT: ${{ inputs.pat }}
         REPO: ${{ github.repository }}
         SHA: ${{ github.sha }}
-        COMPOSE_PATH: ${{ inputs.compose_path }}
+        COMPOSE_PATH: ${{ inputs.docker_compose_path }}
         IS_DEV: ${{ inputs.is_dev }}
         ENV_INPUT: ${{ inputs.env }}
         CENTRAL_REF: ${{ inputs.central_ref }}

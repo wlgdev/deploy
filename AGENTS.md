@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: wlgdev/deploy/.github/actions/deploy@main
         with:
-          trigger_pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
+          pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
           env: |
             SERVICE_IMAGE_NAME=ghcr.io/wlgdev/ЗАМЕНИ-app
             SERVICE_IMAGE_TAG=dev
@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: wlgdev/deploy/.github/actions/deploy@main
         with:
-          trigger_pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
+          pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
           is_dev: 'false'
           env: |
             SERVICE_IMAGE_NAME=ghcr.io/wlgdev/ЗАМЕНИ-app
@@ -61,10 +61,10 @@ jobs:
 
 | Input | Default | Что это |
 |---|---|---|
-| `trigger_pat` | — | всегда `${{ secrets.DEPLOY_TRIGGER_PAT }}` |
-| `compose_path` | `docker-compose.yml` | если compose не в корне |
+| `pat` | — | всегда `${{ secrets.DEPLOY_TRIGGER_PAT }}` |
+| `docker_compose_path` | `docker-compose.yml` | если compose не в корне |
 | `is_dev` | `'true'` | `'false'` → прод-стек `<app>` вместо `<app>-dev` |
-| `env` | — | `K=V` построчно → `.env` (chmod 600) рядом с compose |
+| `env` | — | `K=V` построчно → только на время запуска, на диске не хранятся |
 | `central_ref` | `main` | не трогать |
 
 ## Правила
@@ -72,5 +72,5 @@ jobs:
 - Данные в volumes внутри `/data/apps/<app>` переживают редеплои.
 - Откат = ручной Run workflow в `wlgdev/deploy` со старым `sha`
   (образ с этим SHA должен существовать).
-- Упал деплой — лог run'а в `wlgdev/deploy` → Actions.
+- Упал деплой — падает и твой run, в логе ссылка на центральный run.
 - Версия экшена `@main`; хочешь пин — укажи SHA коммита из `wlgdev/deploy`.
