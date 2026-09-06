@@ -49,13 +49,13 @@
 |---|---|
 | `repo` | всегда `${{ github.repository }}` |
 | `sha` | всегда `${{ github.sha }}` (релиз: тоже sha коммита релиза) |
-| `is_dev` | `true` → `/opt/apps/<app>-dev`, `false` → `/opt/apps/<app>` |
+| `is_dev` | `true` → `/data/apps/<app>-dev`, `false` → `/data/apps/<app>` |
 | `env` | `K=V` построчно → пишется в `.env` (chmod 600) рядом с compose |
 | `compose_path` | если compose не в корне |
 
 ## Правила
 
-- Данные живут в volumes внутри `/opt/apps/<app>` — переживают редеплои.
+- Данные живут в volumes внутри `/data/apps/<app>` — переживают редеплои.
 - Откат = ручной Run workflow в `wlgdev/deploy` со старым `sha`
   (образ с этим SHA должен существовать).
 - Упал деплой — лог run'а в `wlgdev/deploy` → Actions; твой репо там только inputs.

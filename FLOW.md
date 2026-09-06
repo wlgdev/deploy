@@ -2,8 +2,8 @@
 
 ## Пути на сервере
 
-- Прод: `/opt/apps/<app>/` (`docker-compose.yml` + `.env`), стек `up -d`.
-- Дев: `/opt/apps/<app>-dev/` — то же отдельно. Окружение выбирает юзер
+- Прод: `/data/apps/<app>/` (`docker-compose.yml` + `.env`), стек `up -d`.
+- Дев: `/data/apps/<app>-dev/` — то же отдельно. Окружение выбирает юзер
   своим триггером через `is_dev`. Старого `/data/compose` не касаемся.
 
 ## Снепшот: push в master → стек `<app>-dev`
@@ -12,7 +12,7 @@
 2. Джоб `deploy-dev` шлёт диспатч (`repo`, `sha`, `is_dev=true`,
    `env=SERVICE_IMAGE_NAME=…/SERVICE_IMAGE_TAG=dev`).
 3. Центральный run: Validate (org-gate `wlgdev/*`, имя `[a-z0-9-]`, sha hex-40,
-   `compose_path` без `..`) → checkout `repo@sha` → `mkdir /opt/apps/<app>-dev`
+   `compose_path` без `..`) → checkout `repo@sha` → `mkdir /data/apps/<app>-dev`
    → `scp` compose как `.new` → запись `.env` (600) → `mv` → `pull` →
    `up -d --remove-orphans` → `prune` → `ps` в лог.
 4. Прод-стек не тронут.

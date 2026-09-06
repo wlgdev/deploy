@@ -4,7 +4,7 @@
 # Вариант для MobaXterm (зайти своим юзером, затем sudo -i, вставить блок):
 #   id deploy
 #   id -nG deploy | grep -qw docker && echo GROUP_OK
-#   stat -c %U /opt/apps
+#   stat -c %U /data/apps
 #   [ -s /home/deploy/.ssh/authorized_keys ] && echo KEY_OK
 #   sudo -u deploy docker ps | head -3
 #   sudo -u deploy docker compose version
@@ -15,7 +15,7 @@ need() { if eval "$2" >/dev/null 2>&1; then echo "OK:   $1"; else echo "MISS: $1
 
 need "user deploy exists"            "id deploy"
 need "deploy in docker group"        "id -nG deploy | grep -qw docker"
-need "/opt/apps owned by deploy"     "[ \"\$(stat -c %U /opt/apps)\" = deploy ]"
+need "/data/apps owned by deploy"     "[ \"\$(stat -c %U /data/apps)\" = deploy ]"
 need "deploy authorized_keys present" "[ -s /home/deploy/.ssh/authorized_keys ]"
 need "docker works for deploy"       "sudo -u deploy docker ps"
 need "compose plugin for deploy"     "sudo -u deploy docker compose version"

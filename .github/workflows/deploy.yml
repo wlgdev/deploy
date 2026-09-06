@@ -80,9 +80,9 @@ jobs:
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
           SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=yes"
           REMOTE="$SSH_USER@$SSH_HOST"
-          $SSH "$REMOTE" "mkdir -p /opt/apps/$APP"
-          scp -P "$SSH_PORT" -i ~/.ssh/deploy_key "app/$COMPOSE_PATH" "$REMOTE:/opt/apps/$APP/docker-compose.yml.new"
+          $SSH "$REMOTE" "mkdir -p /data/apps/$APP"
+          scp -P "$SSH_PORT" -i ~/.ssh/deploy_key "app/$COMPOSE_PATH" "$REMOTE:/data/apps/$APP/docker-compose.yml.new"
           if [ -n "$ENV_INPUT" ]; then
-            printf '%s' "$ENV_INPUT" | $SSH "$REMOTE" "cat > /opt/apps/$APP/.env && chmod 600 /opt/apps/$APP/.env"
+            printf '%s' "$ENV_INPUT" | $SSH "$REMOTE" "cat > /data/apps/$APP/.env && chmod 600 /data/apps/$APP/.env"
           fi
-          $SSH "$REMOTE" "cd /opt/apps/$APP && mv docker-compose.yml.new docker-compose.yml && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker compose ps"
+          $SSH "$REMOTE" "cd /data/apps/$APP && mv docker-compose.yml.new docker-compose.yml && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker compose ps"
