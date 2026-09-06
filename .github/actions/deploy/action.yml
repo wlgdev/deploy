@@ -38,9 +38,10 @@ runs:
         TITLE="deploy $REPO @ $SHA"
         RUN_ID=""
         for i in $(seq 1 40); do
-          RUN_ID="$(TITLE="$TITLE" START="$START" GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/workflows/deploy.yml/runs?per_page=20" \
-            --jq '.workflow_runs[] | select(.display_title == env.TITLE and .created_at >= env.START) | .id' | head -1)"
-          [ -n "$RUN_ID" ] && break
+          RUN_ID="$(GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/workflows/deploy.yml/runs?per_page=20" \
+            --jq '.workflow_runs[] | "\(.id) \(.created_at) \(.display_title)"' | grep -F " $TITLE" | awk -v s="$START" '$2 >= s {print $1}' | head -1)"
+          if [ -n "$RUN_ID" ]; then echo "found central run $RUN_ID"; break; fi
+          echo "waiting for central run to appear... ($i)"
           sleep 15
         done
         [ -n "$RUN_ID" ] || { echo "::error::central deploy run not found within 10m"; exit 1; }

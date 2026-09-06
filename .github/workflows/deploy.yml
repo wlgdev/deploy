@@ -87,4 +87,4 @@ jobs:
             printf '%s' "$ENV_INPUT" | $SSH "$REMOTE" "cat > /data/apps/$APP/.env.tmp && chmod 600 /data/apps/$APP/.env.tmp"
           fi
           # ponytail: secrets live only in this session env, never on disk (values must not contain newlines)
-          $SSH "$REMOTE" "cd /data/apps/$APP && mv docker-compose.yml.new docker-compose.yml && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker compose ps"
+          $SSH "$REMOTE" "cd /data/apps/$APP && rm -f .env && mv docker-compose.yml.new docker-compose.yml && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker compose ps"
