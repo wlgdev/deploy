@@ -32,6 +32,22 @@ on:
         required: false
         default: ''
         type: string
+      monitor:
+        description: "'true' = attach services to monitor network and inject OTLP_ENDPOINT"
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+      monitor_network:
+        description: 'External Docker network of the monitor stack'
+        required: false
+        default: 'monitor_default'
+        type: string
+      monitor_endpoint:
+        description: 'OTLP HTTP endpoint injected as OTLP_ENDPOINT'
+        required: false
+        default: 'otel-collector:4318'
+        type: string
 
 concurrency:
   group: deploy-${{ inputs.repo }}-${{ inputs.is_dev }}
@@ -48,6 +64,9 @@ jobs:
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           IS_DEV: ${{ inputs.is_dev }}
           TARGET: ${{ inputs.target }}
+          MONITOR: ${{ inputs.monitor }}
+          MONITOR_NETWORK: ${{ inputs.monitor_network }}
+          MONITOR_ENDPOINT: ${{ inputs.monitor_endpoint }}
           ENV_INPUT: ${{ inputs.env }}
           SERVER_URL: ${{ github.server_url }}
         run: |
@@ -61,6 +80,19 @@ jobs:
           [ "${#SHA}" -eq 40 ] || { echo "::error::sha must be full 40-char"; exit 1; }
           case "$COMPOSE_PATH" in ''|*..*|/*) echo "::error::bad docker_compose_path"; exit 1;; esac
           case "$IS_DEV" in true|false) ;; *) echo "::error::is_dev must be true/false"; exit 1;; esac
+          case "$MONITOR" in true|false) ;; *) echo "::error::monitor must be true/false"; exit 1;; esac
+
+          # --- monitor network + endpoint (only when monitor is on) ---
+          if [ "$MONITOR" = "true" ]; then
+            case "$MONITOR_NETWORK" in ''|*[!a-zA-Z0-9_-]*) echo "::error::bad monitor_network"; exit 1;; esac
+            case "$MONITOR_ENDPOINT" in *:*) ;; *) echo "::error::monitor_endpoint must be host:port"; exit 1;; esac
+            case "$MONITOR_ENDPOINT" in *[!a-zA-Z0-9.:\_-]*) echo "::error::bad characters in monitor_endpoint"; exit 1;; esac
+            MON_EP_PORT="${MONITOR_ENDPOINT##*:}"
+            case "$MON_EP_PORT" in *[!0-9]*|'') echo "::error::monitor_endpoint port must be numeric"; exit 1;; esac
+            if [ "$MON_EP_PORT" -lt 1 ] || [ "$MON_EP_PORT" -gt 65535 ]; then
+              echo "::error::monitor_endpoint port out of range: $MON_EP_PORT"; exit 1
+            fi
+          fi
 
           # --- target lines: SUBDOMAIN:SERVICE:PORT ---
           if [ -n "$TARGET" ]; then
@@ -101,6 +133,11 @@ jobs:
               printf 'https://%s.%s<br>' "$sub" "$SUFFIX"
             done <<< "$TARGET")"
           fi
+          if [ "$MONITOR" = "true" ]; then
+            MONITOR_TXT="\`$MONITOR_NETWORK → $MONITOR_ENDPOINT\`"
+          else
+            MONITOR_TXT="— (off)"
+          fi
           {
             echo "## 🚀 Deploy \`$REPO\`"
             echo ""
@@ -110,6 +147,7 @@ jobs:
             echo "| Commit | [\`${SHA:0:7}\`]($SERVER_URL/$REPO/commit/$SHA) |"
             echo "| Image | \`$IMAGE\` |"
             echo "| Routes | $ROUTES |"
+            echo "| Monitor | $MONITOR_TXT |"
             echo "| Path | \`/data/apps/$APP\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -120,29 +158,47 @@ jobs:
           token: ${{ secrets.ORG_READ_PAT }}
           path: app
 
-      - name: 🌐 Generate Traefik override
-        if: ${{ inputs.target != '' }}
+      - name: 🌐 Generate compose override
+        if: ${{ inputs.target != '' || inputs.monitor == 'true' }}
         env:
           APP: ${{ env.APP }}
           IS_DEV: ${{ inputs.is_dev }}
           TARGET: ${{ inputs.target }}
+          MONITOR: ${{ inputs.monitor }}
+          MONITOR_NETWORK: ${{ inputs.monitor_network }}
+          MONITOR_ENDPOINT: ${{ inputs.monitor_endpoint }}
+          COMPOSE_PATH: ${{ inputs.docker_compose_path }}
         run: |
           set -eu
 
-          # --- build docker-compose.override.yml from target lines ---
+          # --- pyyaml for reading service names out of the caller compose ---
+          python3 -c "import yaml" 2>/dev/null || pip install -q pyyaml
+
+          # --- build docker-compose.override.yml from target lines + monitor block ---
           python3 - << 'EOF'
           import os, sys
+          import yaml
 
           target = os.environ.get("TARGET", "").strip()
-          if not target:
-              sys.exit(0)
+          monitor = os.environ.get("MONITOR") == "true"
 
           app = os.environ["APP"]
           is_dev = os.environ.get("IS_DEV") == "true"
           domain_suffix = "dev.wlg.tv" if is_dev else "wlg.tv"
           network_name = f"proxy-{app}-network"
 
-          services = {}
+          networks = []      # external net names, in order
+          svc_nets = {}      # service -> [extra nets]
+          svc_labels = {}    # service -> [label strings]
+          svc_env = {}       # service -> [KEY=VALUE strings]
+
+          def attach(service, net):
+              if net not in networks:
+                  networks.append(net)
+              svc_nets.setdefault(service, [])
+              if net not in svc_nets[service]:
+                  svc_nets[service].append(net)
+
           for line in target.splitlines():
               line = line.strip()
               if not line:
@@ -154,47 +210,72 @@ jobs:
               subdomain = subdomain.removesuffix(".dev.wlg.tv").removesuffix(".wlg.tv")
               host = f"{subdomain}.{domain_suffix}"
               route = f"{app}-{service}"
-              services[service] = {
-                  "host": host,
-                  "route": route,
-                  "port": port,
-              }
-
-          lines = [
-              "networks:",
-              f"  {network_name}:",
-              "    external: true",
-              "services:",
-          ]
-
-          for service_name, cfg in services.items():
-              route = cfg["route"]
-              port = cfg["port"]
-              host = cfg["host"]
-              lines.extend([
-                  f"  {service_name}:",
-                  "    networks:",
-                  "      - default",
-                  f"      - {network_name}",
-                  "    labels:",
-                  "      - \"traefik.enable=true\"",
-                  f"      - \"traefik.http.services.{route}.loadbalancer.server.port={port}\"",
-                  f"      - \"traefik.http.routers.{route}.rule=Host(`{host}`)\"",
-                  f"      - \"traefik.http.routers.{route}.tls=true\"",
-                  f"      - \"traefik.http.routers.{route}.tls.certresolver=letsencrypt\"",
-                  f"      - \"traefik.http.routers.{route}.entrypoints=websecure\"",
-                  f"      - \"traefik.http.routers.{route}-http.rule=Host(`{host}`)\"",
-                  f"      - \"traefik.http.routers.{route}-http.entrypoints=web\"",
-                  f"      - \"traefik.http.routers.{route}-http.middlewares={route}-https\"",
-                  f"      - \"traefik.http.middlewares.{route}-https.redirectscheme.scheme=https\"",
-                  f"      - \"traefik.http.middlewares.{route}-https.redirectscheme.permanent=true\"",
-                  f"      - \"traefik.docker.network={network_name}\"",
+              attach(service, network_name)
+              svc_labels.setdefault(service, []).extend([
+                  "traefik.enable=true",
+                  f"traefik.http.services.{route}.loadbalancer.server.port={port}",
+                  f"traefik.http.routers.{route}.rule=Host(`{host}`)",
+                  f"traefik.http.routers.{route}.tls=true",
+                  f"traefik.http.routers.{route}.tls.certresolver=letsencrypt",
+                  f"traefik.http.routers.{route}.entrypoints=websecure",
+                  f"traefik.http.routers.{route}-http.rule=Host(`{host}`)",
+                  f"traefik.http.routers.{route}-http.entrypoints=web",
+                  f"traefik.http.routers.{route}-http.middlewares={route}-https",
+                  f"traefik.http.middlewares.{route}-https.redirectscheme.scheme=https",
+                  f"traefik.http.middlewares.{route}-https.redirectscheme.permanent=true",
+                  f"traefik.docker.network={network_name}",
               ])
 
-          with open("docker-compose.override.yml", "w", encoding="utf-8") as f:
-              f.write("\n".join(lines) + "\n")
+          if monitor:
+              mnet = os.environ["MONITOR_NETWORK"]
+              mep = os.environ["MONITOR_ENDPOINT"]
+              with open(os.path.join("app", os.environ["COMPOSE_PATH"]), encoding="utf-8") as f:
+                  base = yaml.safe_load(f) or {}
+              names = list((base.get("services") or {}).keys())
+              if not names:
+                  sys.exit("monitor is on but no services found in compose")
+              for service in names:
+                  attach(service, mnet)
+                  svc_env.setdefault(service, []).append(f"OTLP_ENDPOINT={mep}")
+
+          def emit(path, with_monitor):
+              mnet = os.environ.get("MONITOR_NETWORK", "")
+              nets = [n for n in networks if with_monitor or n != mnet]
+              lines = ["networks:"]
+              for net in nets:
+                  lines += [f"  {net}:", "    external: true"]
+              lines += ["services:"]
+              any_svc = False
+              for service, extra in svc_nets.items():
+                  extra = [n for n in extra if with_monitor or n != mnet]
+                  labels = svc_labels.get(service, [])
+                  envs = svc_env.get(service, []) if with_monitor else []
+                  if not extra and not labels and not envs:
+                      continue
+                  any_svc = True
+                  lines += [f"  {service}:", "    networks:", "      - default"]
+                  lines += [f"      - {n}" for n in extra]
+                  if labels:
+                      lines += ["    labels:"] + [f"      - \"{l}\"" for l in labels]
+                  if envs:
+                      lines += ["    environment:"] + [f"      - {e}" for e in envs]
+              with open(path, "w", encoding="utf-8") as f:
+                  if nets or any_svc:
+                      f.write("\n".join(lines) + "\n")
+
+          emit("docker-compose.override.yml", True)
+          if monitor:
+              # traefik-only fallback for when the monitor network is missing on the server
+              emit("docker-compose.override.fallback.yml", False)
           EOF
           echo "📄 docker-compose.override.yml generated"
+
+          # --- merged files must parse before they reach the server ---
+          if [ "$MONITOR" = "true" ]; then
+            docker compose -f "app/$COMPOSE_PATH" -f docker-compose.override.yml config -q \
+              || { echo "::error::merged compose is invalid (monitor block)"; exit 1; }
+            echo "✅ merged compose OK"
+          fi
 
       - name: 🚀 Deploy stack over SSH
         env:
@@ -204,6 +285,8 @@ jobs:
           SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           ENV_INPUT: ${{ inputs.env }}
+          MONITOR: ${{ inputs.monitor }}
+          MONITOR_NETWORK: ${{ inputs.monitor_network }}
         run: |
           set -eu
 
@@ -218,11 +301,30 @@ jobs:
           SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=yes"
           REMOTE="$SSH_USER@$SSH_HOST"
 
+          # --- override pick: full monitor variant, or traefik-only fallback ---
+          # (a missing monitor network must never block the app deploy)
+          OVERRIDE_SRC=""
+          if [ -f docker-compose.override.yml ]; then OVERRIDE_SRC="docker-compose.override.yml"; fi
+          if [ "$MONITOR" = "true" ]; then
+            if $SSH "$REMOTE" "docker network inspect \"$MONITOR_NETWORK\" >/dev/null 2>&1"; then
+              echo "📡 monitor network $MONITOR_NETWORK OK"
+            else
+              echo "::warning::monitor network $MONITOR_NETWORK not found — deploying without monitor attachment"
+              {
+                echo ""
+                echo "### ⚠️ Monitor skipped"
+                echo "Network \`$MONITOR_NETWORK\` not found on server — stack is up without OTLP attachment."
+              } >> "$GITHUB_STEP_SUMMARY"
+              OVERRIDE_SRC=""
+              if [ -s docker-compose.override.fallback.yml ]; then OVERRIDE_SRC="docker-compose.override.fallback.yml"; fi
+            fi
+          fi
+
           # --- upload: compose (+ override) and secrets ---
           $SSH "$REMOTE" "mkdir -p /data/apps/$APP"
           scp -P "$SSH_PORT" -i ~/.ssh/deploy_key "app/$COMPOSE_PATH" "$REMOTE:/data/apps/$APP/docker-compose.yml.new"
-          if [ -f "docker-compose.override.yml" ]; then
-            scp -P "$SSH_PORT" -i ~/.ssh/deploy_key "docker-compose.override.yml" "$REMOTE:/data/apps/$APP/docker-compose.override.yml.new"
+          if [ -n "$OVERRIDE_SRC" ]; then
+            scp -P "$SSH_PORT" -i ~/.ssh/deploy_key "$OVERRIDE_SRC" "$REMOTE:/data/apps/$APP/docker-compose.override.yml.new"
           fi
           if [ -n "$ENV_INPUT" ]; then
             printf '%s' "$ENV_INPUT" | $SSH "$REMOTE" "cat > /data/apps/$APP/.env.tmp && chmod 600 /data/apps/$APP/.env.tmp"

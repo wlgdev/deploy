@@ -100,6 +100,9 @@ jobs:
 | `docker_compose_path` | `docker-compose.yml` | если compose не в корне |
 | `is_dev` | `'true'` | `'false'` → прод-стек `<app>` вместо `<app>-dev` |
 | `target` | — | `SUBDOMAIN:SERVICE:PORT` для Traefik (пусто = headless) |
+| `monitor` | `'false'` | `'true'` → все сервисы в сеть монитора + `OTLP_ENDPOINT` (OTLP логи/метрики) |
+| `monitor_network` | `monitor_default` | внешняя сеть монитора (нужен `monitor: 'true'`) |
+| `monitor_endpoint` | `otel-collector:4318` | OTLP HTTP-эндпоинт как `OTLP_ENDPOINT` (нужен `monitor: 'true'`) |
 | `service_image_name` | `ghcr.io/wlgdev/<твой-проект>` | какой образ тянуть; свой registry — передай явно |
 | `service_image_tag` | короткий sha (на релизе — тег релиза) | какой тег тянуть; переопредели, если тегаешь иначе |
 | `env` | — | `K=V` построчно → только на время запуска, на диске не хранятся |
@@ -109,7 +112,7 @@ jobs:
 
 - Данные в volumes внутри `/data/apps/<app>` переживают редеплои.
 - Откат = ручной Run workflow в `wlgdev/deploy` со старым `sha`
-  (образ должен существовать в `ghcr.io`; `env` и `target` скопируй из workflow,
-  иначе деплой будет headless).
+  (образ должен существовать в `ghcr.io`; `env`, `target` и `monitor` скопируй из workflow,
+  иначе деплой будет headless и без мониторинга).
 - Упал деплой — падает и твой run, в логе ссылка на центральный run.
 - Версия экшена `@main`; хочешь пин — укажи SHA коммита из `wlgdev/deploy`.

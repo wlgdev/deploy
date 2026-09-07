@@ -29,6 +29,18 @@ inputs:
     required: false
     default: ''
     description: 'SUBDOMAIN:SERVICE:PORT lines for Traefik routing (leave empty for headless deploy)'
+  monitor:
+    required: false
+    default: 'false'
+    description: "'true' = attach services to monitor network and inject OTLP_ENDPOINT (OTLP logs+metrics)"
+  monitor_network:
+    required: false
+    default: 'monitor_default'
+    description: 'External Docker network of the monitor stack (needs monitor=true)'
+  monitor_endpoint:
+    required: false
+    default: 'otel-collector:4318'
+    description: 'OTLP HTTP endpoint injected as OTLP_ENDPOINT (needs monitor=true)'
   central_ref:
     required: false
     default: 'main'
@@ -96,6 +108,7 @@ runs:
 
         # --- sanity ---
         case "$IS_DEV" in true|false) ;; *) echo "::error::is_dev must be 'true' or 'false'"; exit 1;; esac
+        case "$MONITOR_IN" in true|false) ;; *) echo "::error::monitor must be 'true' or 'false'"; exit 1;; esac
 
         # --- image coordinates: explicit inputs win, the rest is derived from the caller repo + event ---
         if [ -z "$IMAGE_NAME_IN" ]; then
@@ -122,6 +135,9 @@ runs:
           printf '%s\n' "$TARGET_IN" >> "$GITHUB_ENV"
           echo "EOF" >> "$GITHUB_ENV"
         fi
+        if [ "$MONITOR_IN" = "true" ]; then
+          echo "WLG_MONITOR=$MONITOR_NETWORK_IN → $MONITOR_ENDPOINT_IN" >> "$GITHUB_ENV"
+        fi
 
         # --- dispatch the central workflow ---
         # START before dispatch: the central run's created_at can predate the curl response
@@ -131,7 +147,8 @@ runs:
           "https://api.github.com/repos/wlgdev/deploy/actions/workflows/deploy.yml/dispatches" \
           -d "$(jq -n --arg repo "$REPO" --arg sha "$SHA" --arg compose "$COMPOSE_PATH" \
                         --arg dev "$IS_DEV" --arg env "$ENV_PAYLOAD" --arg target "$TARGET_IN" --arg ref "$CENTRAL_REF" \
-                '{ref:$ref,inputs:{repo:$repo, sha:$sha, docker_compose_path:$compose, is_dev:$dev, env:$env, target:$target}}')"
+                        --arg monitor "$MONITOR_IN" --arg monitor_network "$MONITOR_NETWORK_IN" --arg monitor_endpoint "$MONITOR_ENDPOINT_IN" \
+                '{ref:$ref,inputs:{repo:$repo, sha:$sha, docker_compose_path:$compose, is_dev:$dev, env:$env, target:$target, monitor:$monitor, monitor_network:$monitor_network, monitor_endpoint:$monitor_endpoint}}')"
         echo -e "🚀 dispatch accepted, waiting for central run: $REPO @ ${SHA:0:7} (is_dev=$IS_DEV)"
 
         # --- wait for the central run to appear ---
@@ -170,6 +187,9 @@ runs:
         RELEASE_TAG: ${{ github.event.release.tag_name }}
         ENV_INPUT: ${{ inputs.env }}
         TARGET_IN: ${{ inputs.target }}
+        MONITOR_IN: ${{ inputs.monitor }}
+        MONITOR_NETWORK_IN: ${{ inputs.monitor_network }}
+        MONITOR_ENDPOINT_IN: ${{ inputs.monitor_endpoint }}
         CENTRAL_REF: ${{ inputs.central_ref }}
 
     - name: 📍 Update GitHub deployment
@@ -221,6 +241,9 @@ runs:
             echo '```'
             echo "$WLG_TARGET"
             echo '```'
+          fi
+          if [ -n "${WLG_MONITOR:-}" ]; then
+            echo "- Monitor: \`$WLG_MONITOR\`"
           fi
         } >> "$GITHUB_STEP_SUMMARY"
       shell: bash

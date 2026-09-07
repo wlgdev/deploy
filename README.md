@@ -221,6 +221,20 @@ _Переменные передаются в процесс запуска и �
 3. SSL-сертификаты выпускаются автоматически через Let's Encrypt, plain HTTP редиректит на `https://` (301).
 4. Если параметр `target` **не указан**, проект деплоится в стандартном headless-режиме (без проксирования и внешних сетей).
 
+### Шаг 7. Подключение мониторинга (OTLP, опционально)
+
+Чтобы логи и метрики приложения уезжали в центральный монитор (`monitor.wlg.tv`):
+
+```yaml
+- uses: wlgdev/deploy/.github/actions/deploy@main
+  with:
+    pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
+    is_dev: "true"
+    monitor: "true"
+```
+
+Деплой сам подключит все сервисы стека к сети монитора и выставит `OTLP_ENDPOINT` (по умолчанию `otel-collector:4318`, сеть `monitor_default` — меняются через `monitor_network` / `monitor_endpoint`). Свой `docker-compose.yml` менять не нужно. Если сеть монитора недоступна, стек всё равно встанет, а в summary будет предупреждение. Работает и вместе с `target`, и в headless-режиме.
+
 ---
 
 ## Мониторинг и просмотр логов
@@ -253,6 +267,9 @@ _Переменные передаются в процесс запуска и �
 | `pat`                 | _Обязательный_          | Секрет `${{ secrets.DEPLOY_TRIGGER_PAT }}` для авторизации               |
 | `is_dev`              | `'true'`                | `'true'` для dev-стека (`<app>-dev`), `'false'` для продакшена (`<app>`) |
 | `target`              | `''`                    | `ПОДДОМЕН:СЕРВИС:ПОРТ` для Traefik HTTPS-роутинга (пусто = headless)     |
+| `monitor`             | `'false'`               | `'true'` — подключить стек к сети монитора, инжектить `OTLP_ENDPOINT`   |
+| `monitor_network`     | `monitor_default`       | Внешняя сеть стека монитора (нужен `monitor: 'true'`)                   |
+| `monitor_endpoint`    | `otel-collector:4318`   | OTLP HTTP-эндпоинт как `OTLP_ENDPOINT` (нужен `monitor: 'true'`)         |
 | `docker_compose_path` | `docker-compose.yml`    | Путь к файлу compose относительно корня репозитория                      |
 | `env`                 | `''`                    | Переменные окружения вида `KEY=VALUE` (построчно)                        |
 | `service_image_name`  | `ghcr.io/wlgdev/<repo>` | Кастомный адрес реестра образов (если отличается от стандартного)        |
