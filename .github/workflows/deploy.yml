@@ -49,6 +49,7 @@ jobs:
           IS_DEV: ${{ inputs.is_dev }}
           TARGET: ${{ inputs.target }}
           ENV_INPUT: ${{ inputs.env }}
+          SERVER_URL: ${{ github.server_url }}
         run: |
           set -eu
 
@@ -106,7 +107,7 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| Stack | \`$APP\` |"
-            echo "| Commit | \`${SHA:0:7}\` |"
+            echo "| Commit | [\`${SHA:0:7}\`]($SERVER_URL/$REPO/commit/$SHA) |"
             echo "| Image | \`$IMAGE\` |"
             echo "| Routes | $ROUTES |"
             echo "| Path | \`/data/apps/$APP\` |"
@@ -270,5 +271,5 @@ jobs:
           {
             echo "## ❌ Deploy failed"
             echo ""
-            echo "Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "[Open logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           } >> "$GITHUB_STEP_SUMMARY"

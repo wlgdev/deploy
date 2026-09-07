@@ -134,8 +134,9 @@ runs:
           echo ""
           echo "- Image: \`${WLG_IMAGE:-—}\`"
           echo "- Stack: \`${WLG_TITLE:-—}\` (is_dev=${{ inputs.is_dev }})"
+          echo "- Commit: [\`${GITHUB_SHA:0:7}\`](${{ github.server_url }}/${{ github.repository }}/commit/$GITHUB_SHA)"
           if [ -n "${WLG_RUN_ID:-}" ]; then
-            echo "- Central run: ${{ github.server_url }}/wlgdev/deploy/actions/runs/$WLG_RUN_ID"
+            echo "- Central run: [open logs](${{ github.server_url }}/wlgdev/deploy/actions/runs/$WLG_RUN_ID)"
           else
             echo "- Central run: not found (dispatch may have failed)"
           fi

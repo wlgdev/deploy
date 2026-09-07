@@ -257,7 +257,7 @@ _Переменные передаются в процесс запуска и �
 
 ### Необходимые секреты в `wlgdev/deploy`:
 
-- `DEPLOY_SSH_HOST`, `DEPLOY_SSH_PORT`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KEY` — реквизиты SSH пользователя `deploy`.
+- `DEPLOY_SSH_HOST`, `DEPLOY_SSH_KEY` — адрес сервера и приватный ключ пользователя `deploy` (`DEPLOY_SSH_USER`/`DEPLOY_SSH_PORT` необязательны — по умолчанию `deploy`/`22`).
 - `ORG_READ_PAT` — Classic PAT с областью `repo` для выкачивания приватных репозиториев организации.
 - Переменная `GHCR_USER` — пользователь для GHCR.
 
