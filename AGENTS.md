@@ -12,22 +12,15 @@
    (см. таблицу), хочешь другое — передай `service_image_name` / `service_image_tag`.
    Сторонние образы хардкодь как есть (`image: postgres:16`),
    мультисервис — своими переменными на сервис.
-3. Сборка тегает образ коротким sha коммита (деплой подставит его сам).
-   Минимум для сборки:
+3. Сборка и пуш образа — через наш publish-экшен (логин в `ghcr.io` внутри, теги и чистка старых версий — сами):
    ```yaml
-   - uses: docker/metadata-action@v5
-     id: meta
+   - uses: actions/checkout@v7
+   - uses: wlgdev/deploy/.github/actions/publish@main
      with:
-       images: ghcr.io/wlgdev/ТВОЙ-проект
-       tags: |
-         type=sha
-         type=raw,value=dev
-   - uses: docker/build-push-action@v6
-     with:
-       push: true
-       tags: ${{ steps.meta.outputs.tags }}
+       is_dev: "true"   # 'false' — на релизе
    ```
-   На релизе добавь в `tags` строкой тег релиза — прод-деплой возьмёт его сам.
+   В workflow нужны `permissions: contents:read, packages:write, actions:write`.
+   Dockerfile не в корне — передай `dockerfile: 'docker/Dockerfile'` (контекст всегда корень репо).
 4. Секрет `DEPLOY_TRIGGER_PAT` в настройках репо (выдаёт мейнтейнер `wlgdev/deploy`).
 
 ## Дев: push → стек `<app>-dev`

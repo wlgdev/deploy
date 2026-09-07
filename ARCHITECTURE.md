@@ -7,6 +7,7 @@
 ```text
 wlgdev/deploy (Центральный репозиторий)
 ├── .github/actions/deploy/action.yml  # Composite Action для вызова из клиентских репозиториев
+├── .github/actions/publish/action.yml  # Composite Action для сборки и публикации образов в ghcr.io
 ├── .github/workflows/deploy.yml       # Центральный workflow: валидация, checkout, SSH-деплой
 └── scripts/check-server.sh            # Скрипт проверки готовности сервера
 

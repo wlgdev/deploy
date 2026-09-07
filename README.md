@@ -76,35 +76,20 @@ on:
 permissions:
   contents: read
   packages: write
+  actions: write
 
 jobs:
-  build-and-push:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/login-action@v3
+      - uses: wlgdev/deploy/.github/actions/publish@main
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=sha
-            type=raw,value=dev
-
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          is_dev: "true"
 
   deploy:
-    needs: build-and-push
+    needs: publish
     runs-on: ubuntu-latest
     steps:
       - uses: wlgdev/deploy/.github/actions/deploy@main
@@ -131,35 +116,20 @@ on:
 permissions:
   contents: read
   packages: write
+  actions: write
 
 jobs:
-  build-and-push:
+  publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/login-action@v3
+      - uses: wlgdev/deploy/.github/actions/publish@main
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=release
-            type=sha
-
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          is_dev: "false"
 
   deploy:
-    needs: build-and-push
+    needs: publish
     runs-on: ubuntu-latest
     steps:
       - uses: wlgdev/deploy/.github/actions/deploy@main
@@ -169,6 +139,36 @@ jobs:
 ```
 
 При публикации релиза сервис развернётся в прод-стеке `/data/apps/<имя-проекта>`.
+
+---
+
+#### Как экшен publish тегает образы
+
+Имя и тег по умолчанию вычисляются сами: имя — `ghcr.io/wlgdev/<имя-вашего-репозитория>`, тег — короткий SHA коммита (на релизе — имя релиза). Явно можно переопределить через `service_image_name` / `service_image_tag`.
+
+| `is_dev` | Какие теги пушатся |
+| -------- | ------------------ |
+| `"true"` | `<sha>`, `dev` |
+| `"false"` | `<тег>`, `<sha>`, `latest` |
+
+После пуша экшен чистит старые версии пакета: в dev остаётся свежая версия + 1 предыдущая, в релизах — свежая + 2 предыдущих. Теги `dev` и `latest` при чистке не удаляются никогда.
+
+#### Параметры экшена `wlgdev/deploy/.github/actions/publish`
+
+| Параметр             | По умолчанию     | Описание                                                              |
+| -------------------- | ---------------- | --------------------------------------------------------------------- |
+| `dockerfile`         | `Dockerfile`     | Путь к Dockerfile от корня репозитория (контекст сборки — всегда корень) |
+| `is_dev`             | `'true'`         | `'false'` — прод-теги (`<тег>`, `<sha>`, `latest`)                    |
+| `service_image_name` | `ghcr.io/wlgdev/<repo>` | Кастомный адрес реестра образов (без тега)                     |
+| `service_image_tag`  | sha / имя релиза | Кастомный первичный тег                                               |
+| `platforms`          | `linux/amd64`    | Целевые платформы через запятую                                       |
+| `push`               | `'true'`         | `'false'` — только локальная сборка без пуша и чистки (для проверки PR) |
+| `cache`              | `'true'`         | Кэш слоёв через GitHub Actions cache (нужен `actions: write`)         |
+| `build_args`         | `''`             | Строки `КЛЮЧ=ЗНАЧЕНИЕ` для `--build-arg`                              |
+| `build_target`       | `''`             | Target-стейдж сборки (пусто — стейдж по умолчанию)                    |
+| `extra_tags`         | `''`             | Дополнительные теги построчно (без имени образа)                      |
+
+На выходе — `image` (репозиторий без тега), `tag` (первичный тег) и `digest` (дайджест запушенного манифеста). В workflow с publish нужны права `contents: read`, `packages: write` и `actions: write` (последнее — только для кэша, при `cache: 'false'` не нужно).
 
 ---
 

@@ -1,0 +1,247 @@
+name: publish image to ghcr.io
+description: Builds a Docker image and pushes it to ghcr.io (sha tag always, dev floating tag on is_dev=true, latest on prod), then prunes old versions. Caller workflow needs permissions: contents read, packages write, actions write (build cache).
+
+inputs:
+  dockerfile:
+    required: false
+    default: 'Dockerfile'
+    description: 'Dockerfile path from the repo root (build context is always the repo root)'
+  is_dev:
+    required: false
+    default: 'true'
+    description: "'true' = dev tags (<sha>, dev), 'false' = prod tags (<tag>, <sha>, latest)"
+  service_image_name:
+    required: false
+    default: ''
+    description: 'Image repo, default is ghcr.io/wlgdev/<your-repo-name>'
+  service_image_tag:
+    required: false
+    default: ''
+    description: 'Primary tag, default is the release tag (on release) or the short commit sha'
+  platforms:
+    required: false
+    default: 'linux/amd64'
+    description: 'Target platforms, comma-separated'
+  push:
+    required: false
+    default: 'true'
+    description: "'false' = local build only, nothing is pushed or pruned"
+  cache:
+    required: false
+    default: 'true'
+    description: "'true' = share layers via GitHub Actions cache (needs actions: write permission)"
+  build_args:
+    required: false
+    default: ''
+    description: 'KEY=VALUE lines passed as docker build args'
+  build_target:
+    required: false
+    default: ''
+    description: 'Build stage to target (empty = default stage)'
+  extra_tags:
+    required: false
+    default: ''
+    description: 'Extra tags, one per line, without the image name'
+
+outputs:
+  image:
+    description: 'Image repo without tag, e.g. ghcr.io/wlgdev/mybot'
+    value: ${{ steps.resolve.outputs.image }}
+  tag:
+    description: 'Primary tag that was pushed'
+    value: ${{ steps.resolve.outputs.tag }}
+  digest:
+    description: 'Pushed manifest digest (empty when push is false)'
+    value: ${{ steps.build.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: 🏷️ Resolve image coordinates
+      id: resolve
+      run: |
+        set -eu
+
+        GREEN='\033[1;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+
+        # --- sanity ---
+        case "$IS_DEV" in true|false) ;; *) echo "::error::is_dev must be 'true' or 'false'"; exit 1;; esac
+        case "$PUSH" in true|false) ;; *) echo "::error::push must be 'true' or 'false'"; exit 1;; esac
+        case "$CACHE" in true|false) ;; *) echo "::error::cache must be 'true' or 'false'"; exit 1;; esac
+        case "$DOCKERFILE" in ''|*..*|/*) echo "::error::bad dockerfile path"; exit 1;; esac
+        [ -f "$DOCKERFILE" ] || { echo "::error::dockerfile not found: $DOCKERFILE"; exit 1; }
+
+        # --- image repo: explicit input wins, the rest is derived from the caller repo ---
+        if [ -z "$IMAGE_NAME_IN" ]; then
+          IMAGE_NAME_IN="ghcr.io/wlgdev/$(printf '%s' "${REPO#*/}" | tr '[:upper:]' '[:lower:]')"
+        else
+          IMAGE_NAME_IN="$(printf '%s' "$IMAGE_NAME_IN" | tr '[:upper:]' '[:lower:]')"
+        fi
+        case "$IMAGE_NAME_IN" in *:*) echo "::error::service_image_name must be a repo without tag"; exit 1;; esac
+
+        # --- primary tag: explicit input wins, else release tag or short sha ---
+        if [ -z "$IMAGE_TAG_IN" ]; then
+          if [ "$EVENT_NAME" = "release" ] && [ -n "$RELEASE_TAG" ]; then
+            IMAGE_TAG_IN="$RELEASE_TAG"
+          else
+            IMAGE_TAG_IN="$(printf '%s' "$SHA" | cut -c1-7)"
+          fi
+        fi
+        IMAGE_TAG_IN="$(printf '%s' "$IMAGE_TAG_IN" | tr '[:upper:]' '[:lower:]')"
+        SHA7="$(printf '%s' "$SHA" | cut -c1-7)"
+
+        # --- full tag set: sha always travels along; dev floats on dev builds, latest sticks to prod ---
+        if [ "$IS_DEV" = "true" ]; then FLOAT_TAG="dev"; else FLOAT_TAG="latest"; fi
+        TAG_LIST="$(printf '%s\n%s\n%s\n%s' "$IMAGE_TAG_IN" "$SHA7" "$FLOAT_TAG" "$EXTRA_TAGS" | grep -v '^[[:space:]]*$' | sort -u)"
+        TAG_LINES="$(printf '%s\n' "$TAG_LIST" | sed "s|^|$IMAGE_NAME_IN:|")"
+
+        echo -e "📦 image: ${YELLOW}$IMAGE_NAME_IN${NC}"
+        echo -e "🏷️ tags: ${YELLOW}$(printf '%s' "$TAG_LIST" | tr '\n' ' ')${NC}"
+
+        {
+          echo "image=$IMAGE_NAME_IN"
+          echo "tag=$IMAGE_TAG_IN"
+          echo "tags<<EOF"
+          printf '%s\n' "$TAG_LINES"
+          echo "EOF"
+          if [ "$CACHE" = "true" ]; then
+            echo "cache_from=type=gha"
+            echo "cache_to=type=gha,mode=max"
+          fi
+        } >> "$GITHUB_OUTPUT"
+
+        # summary inputs, shown by the 📋 step below
+        echo "WLG_IMAGE=$IMAGE_NAME_IN:$IMAGE_TAG_IN" >> "$GITHUB_ENV"
+        echo "WLG_PKG=${IMAGE_NAME_IN##*/}" >> "$GITHUB_ENV"
+        echo "WLG_TAGS<<EOF" >> "$GITHUB_ENV"
+        printf '%s\n' "$TAG_LINES" >> "$GITHUB_ENV"
+        echo "EOF" >> "$GITHUB_ENV"
+      shell: bash
+      env:
+        REPO: ${{ github.repository }}
+        SHA: ${{ github.sha }}
+        EVENT_NAME: ${{ github.event_name }}
+        RELEASE_TAG: ${{ github.event.release.tag_name }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        IS_DEV: ${{ inputs.is_dev }}
+        IMAGE_NAME_IN: ${{ inputs.service_image_name }}
+        IMAGE_TAG_IN: ${{ inputs.service_image_tag }}
+        PUSH: ${{ inputs.push }}
+        CACHE: ${{ inputs.cache }}
+        EXTRA_TAGS: ${{ inputs.extra_tags }}
+
+    - name: 🔑 Login to ghcr.io
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    - name: 🏗️ Setup buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: 🐳 Build and push
+      id: build
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ${{ inputs.dockerfile }}
+        platforms: ${{ inputs.platforms }}
+        push: ${{ inputs.push }}
+        tags: ${{ steps.resolve.outputs.tags }}
+        build-args: ${{ inputs.build_args }}
+        target: ${{ inputs.build_target }}
+        provenance: false
+        cache-from: ${{ steps.resolve.outputs.cache_from }}
+        cache-to: ${{ steps.resolve.outputs.cache_to }}
+
+    - name: 🧹 Prune old image versions
+      if: ${{ inputs.push == 'true' }}
+      run: |
+        set -eu
+
+        # --- list all versions of the package (empty = brand-new package, nothing to prune) ---
+        PKG="$(printf '%s' "${REPO#*/}" | tr '[:upper:]' '[:lower:]')"
+        VERSIONS="$(gh api --paginate "orgs/wlgdev/packages/container/$PKG/versions?per_page=100" 2>/dev/null || true)"
+        if [ -z "$VERSIONS" ] || [ "$VERSIONS" = "[]" ]; then
+          echo "nothing to prune yet"
+          echo "WLG_PRUNED=0" >> "$GITHUB_ENV"
+          exit 0
+        fi
+
+        # --- split into dev pool (sha-only tags) and release pool (has a human tag), drop the tail of each ---
+        # ponytail: keep-counts are constants (dev 2 = new + 1 old, releases 3 = new + 2 old); inputs if someone ever asks
+        printf '%s' "$VERSIONS" | PKG="$PKG" python3 - << 'EOF'
+        import json, os, re, subprocess, sys
+
+        keep = {'dev': 2, 'release': 3}
+        sha_re = re.compile(r'^[0-9a-f]{7}$')
+        floating = {'dev', 'latest'}
+        pkg = os.environ['PKG']
+        pruned = 0
+
+        def pool(tags):
+            if any(not sha_re.match(t or '') and t not in floating for t in tags):
+                return 'release'
+            return 'dev'
+
+        groups = {'dev': [], 'release': []}
+        for v in json.load(sys.stdin):
+            tags = v.get('metadata', {}).get('container', {}).get('tags') or []
+            groups[pool(tags)].append((v.get('created_at', ''), v['id'], tags))
+
+        for name, versions in groups.items():
+            versions.sort(reverse=True)
+            for _, vid, tags in versions[keep[name]:]:
+                if set(tags) & floating:
+                    continue  # safety: never drop the floating tags
+                label = ', '.join(tags) if tags else 'untagged'
+                print(f"pruning {name} version {vid} ({label})")
+                r = subprocess.run(
+                    ['gh', 'api', '-X', 'DELETE',
+                     f"orgs/wlgdev/packages/container/{pkg}/versions/{vid}"],
+                    capture_output=True, text=True)
+                if r.returncode != 0:
+                    print(f"::warning::could not prune version {vid}: {r.stderr.strip()}")
+                else:
+                    pruned += 1
+
+        print(f"pruned {pruned} old version(s)")
+        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+            f.write(f"WLG_PRUNED={pruned}\n")
+        EOF
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+
+    - name: 📋 Summary
+      if: always()
+      run: |
+        if [ "${{ steps.build.outcome }}" = "success" ]; then
+          echo "## ✅ Image published" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "## ❌ Publish failed" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        {
+          echo ""
+          echo "- Image: \`${WLG_IMAGE:-—}\`"
+          if [ -n "${WLG_DIGEST:-}" ]; then
+            echo "- Digest: \`$WLG_DIGEST\`"
+          else
+            echo "- Digest: — (not pushed)"
+          fi
+          echo "- Pruned: ${WLG_PRUNED:-—} old version(s)"
+          if [ -n "${WLG_PKG:-}" ]; then
+            echo "- Package: [open package](${{ github.server_url }}/orgs/wlgdev/packages/container/$WLG_PKG)"
+          fi
+          if [ -n "${WLG_TAGS:-}" ]; then
+            echo "- Tags:"
+            echo '```'
+            echo "$WLG_TAGS"
+            echo '```'
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+      shell: bash
+      env:
+        WLG_DIGEST: ${{ steps.build.outputs.digest }}
