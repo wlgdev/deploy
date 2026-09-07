@@ -1,4 +1,4 @@
-# Деплой проекта через wlgdev/deploy (v1: headless, без трафика извне)
+# Деплой проекта через wlgdev/deploy
 
 > Деплой = собрать образ, запушить в `ghcr.io`, вызвать экшен ниже.
 > SSH-ключи и хосты тебе не нужны.
@@ -33,8 +33,21 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+  actions: write
+  deployments: write
 jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: wlgdev/deploy/.github/actions/publish@main
+        with:
+          is_dev: "true"
   deploy-dev:
+    needs: publish
     runs-on: ubuntu-latest
     steps:
       - uses: wlgdev/deploy/.github/actions/deploy@main
@@ -54,8 +67,21 @@ name: deploy-prod
 on:
   release:
     types: [published]
+permissions:
+  contents: read
+  packages: write
+  actions: write
+  deployments: write
 jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: wlgdev/deploy/.github/actions/publish@main
+        with:
+          is_dev: "false"
   deploy-prod:
+    needs: publish
     runs-on: ubuntu-latest
     steps:
       - uses: wlgdev/deploy/.github/actions/deploy@main
@@ -83,6 +109,7 @@ jobs:
 
 - Данные в volumes внутри `/data/apps/<app>` переживают редеплои.
 - Откат = ручной Run workflow в `wlgdev/deploy` со старым `sha`
-  (образ с этим SHA должен существовать).
+  (образ должен существовать в `ghcr.io`; `env` и `target` скопируй из workflow,
+  иначе деплой будет headless).
 - Упал деплой — падает и твой run, в логе ссылка на центральный run.
 - Версия экшена `@main`; хочешь пин — укажи SHA коммита из `wlgdev/deploy`.
