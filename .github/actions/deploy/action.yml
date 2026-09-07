@@ -64,16 +64,20 @@ runs:
             transient_environment:($env == "DEV"), production_environment:($env == "PRODUCTION"),
             description:$desc}')"
         DEPLOY_ID="$(GH_TOKEN="$GH_TOKEN" gh api -X POST "repos/$REPO/deployments" --input - --jq '.id' <<< "$PAYLOAD" 2>/dev/null || true)"
-        if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
-          echo "WLG_DEPLOYMENT_ID=$DEPLOY_ID" >> "$GITHUB_ENV"
-          STATUS="$(jq -n --arg log "$SERVER_URL/wlgdev/deploy/actions" \
-            '{state:"in_progress", description:"deploy is running", log_url:$log}')"
-          GH_TOKEN="$GH_TOKEN" gh api -X POST "repos/$REPO/deployments/$DEPLOY_ID/statuses" --input - <<< "$STATUS" > /dev/null \
-            || echo "::warning::could not set deployment status to in_progress"
-          echo "📍 deployment $DEPLOY_ID ($ENV_NAME) created"
-        else
-          echo "::warning::could not create GitHub deployment (caller workflow needs permissions: deployments write)"
-        fi
+        # --- numeric id only: anything else is an API error payload, not a deployment ---
+        case "$DEPLOY_ID" in
+          ''|*[!0-9]*)
+            echo "::warning::could not create GitHub deployment (caller workflow needs permissions: deployments write)"
+            ;;
+          *)
+            echo "WLG_DEPLOYMENT_ID=$DEPLOY_ID" >> "$GITHUB_ENV"
+            STATUS="$(jq -n --arg log "$SERVER_URL/wlgdev/deploy/actions" \
+              '{state:"in_progress", description:"deploy is running", log_url:$log}')"
+            GH_TOKEN="$GH_TOKEN" gh api -X POST "repos/$REPO/deployments/$DEPLOY_ID/statuses" --input - <<< "$STATUS" > /dev/null \
+              || echo "::warning::could not set deployment status to in_progress"
+            echo "📍 deployment $DEPLOY_ID ($ENV_NAME) created"
+            ;;
+        esac
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
