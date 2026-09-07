@@ -171,8 +171,15 @@ runs:
 
         # --- split into dev pool (sha-only tags) and release pool (has a human tag), drop the tail of each ---
         # ponytail: keep-counts are constants (dev 2 = new + 1 old, releases 3 = new + 2 old); inputs if someone ever asks
-        printf '%s' "$VERSIONS" | PKG="$PKG" python3 - << 'EOF'
+        # (via temp file: the heredoc already owns python's stdin, a pipe would go nowhere)
+        VERSIONS_FILE="$(mktemp)"
+        printf '%s' "$VERSIONS" > "$VERSIONS_FILE"
+        PKG="$PKG" VERSIONS_FILE="$VERSIONS_FILE" python3 - << 'EOF'
         import json, os, re, subprocess, sys
+
+        def done(n):
+            with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+                f.write(f"WLG_PRUNED={n}\n")
 
         keep = {'dev': 2, 'release': 3}
         sha_re = re.compile(r'^[0-9a-f]{7}$')
@@ -185,8 +192,15 @@ runs:
                 return 'release'
             return 'dev'
 
+        with open(os.environ['VERSIONS_FILE'], encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            print("::warning::unexpected versions response, skipping prune")
+            done(0)
+            sys.exit(0)
+
         groups = {'dev': [], 'release': []}
-        for v in json.load(sys.stdin):
+        for v in data:
             tags = v.get('metadata', {}).get('container', {}).get('tags') or []
             groups[pool(tags)].append((v.get('created_at', ''), v['id'], tags))
 
@@ -207,9 +221,9 @@ runs:
                     pruned += 1
 
         print(f"pruned {pruned} old version(s)")
-        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
-            f.write(f"WLG_PRUNED={pruned}\n")
+        done(pruned)
         EOF
+        rm -f "$VERSIONS_FILE"
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
