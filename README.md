@@ -77,6 +77,7 @@ permissions:
   contents: read
   packages: write
   actions: write
+  deployments: write
 
 jobs:
   publish:
@@ -117,6 +118,7 @@ permissions:
   contents: read
   packages: write
   actions: write
+  deployments: write
 
 jobs:
   publish:
@@ -139,6 +141,10 @@ jobs:
 ```
 
 При публикации релиза сервис развернётся в прод-стеке `/data/apps/<имя-проекта>`.
+
+#### Раздел Deployments на GitHub
+
+Каждый деплой пишется в раздел Deployments вашего репозитория: `DEV` для dev-стека, `PRODUCTION` для прода. Кнопка «View deployment» ведёт на первый адрес из `target`. Нужны права `deployments: write` (уже есть в сниппетах выше).
 
 ---
 

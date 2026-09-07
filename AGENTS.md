@@ -19,7 +19,7 @@
      with:
        is_dev: "true"   # 'false' — на релизе
    ```
-   В workflow нужны `permissions: contents:read, packages:write, actions:write`.
+   В workflow нужны `permissions: contents:read, packages:write, actions:write, deployments:write` (последнее — для раздела Deployments: `DEV`/`PRODUCTION`).
    Dockerfile не в корне — передай `dockerfile: 'docker/Dockerfile'` (контекст всегда корень репо).
 4. Секрет `DEPLOY_TRIGGER_PAT` в настройках репо (выдаёт мейнтейнер `wlgdev/deploy`).
 
