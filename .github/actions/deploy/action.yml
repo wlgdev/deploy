@@ -37,11 +37,17 @@ inputs:
 runs:
   using: composite
   steps:
-    - run: |
+    - name: 🚀 Deploy via wlgdev/deploy
+      id: deploy
+      run: |
         set -eu
+
         GREEN='\033[1;32m'; RED='\033[1;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
+
+        # --- sanity ---
         case "$IS_DEV" in true|false) ;; *) echo "::error::is_dev must be 'true' or 'false'"; exit 1;; esac
-        # Image coordinates: explicit inputs win, the rest is derived from the caller repo + event
+
+        # --- image coordinates: explicit inputs win, the rest is derived from the caller repo + event ---
         if [ -z "$IMAGE_NAME_IN" ]; then
           IMAGE_NAME_IN="ghcr.io/wlgdev/$(printf '%s' "${REPO#*/}" | tr '[:upper:]' '[:lower:]')"
         fi
@@ -52,10 +58,22 @@ runs:
             IMAGE_TAG_IN="$(printf '%s' "$SHA" | cut -c1-7)"
           fi
         fi
+
         # inputs win over env lines with the same keys
         ENV_PAYLOAD="$(printf '%s' "$ENV_INPUT" | grep -v '^SERVICE_IMAGE_NAME=' | grep -v '^SERVICE_IMAGE_TAG=' || true)"
         ENV_PAYLOAD="$(printf '%s\nSERVICE_IMAGE_NAME=%s\nSERVICE_IMAGE_TAG=%s' "$ENV_PAYLOAD" "$IMAGE_NAME_IN" "$IMAGE_TAG_IN")"
         echo -e "📦 image: ${YELLOW}$IMAGE_NAME_IN:$IMAGE_TAG_IN${NC}"
+
+        # summary inputs (multiline target via heredoc, shown by the 📋 step below)
+        echo "WLG_IMAGE=$IMAGE_NAME_IN:$IMAGE_TAG_IN" >> "$GITHUB_ENV"
+        echo "WLG_TITLE=deploy $REPO @ $SHA" >> "$GITHUB_ENV"
+        if [ -n "$TARGET_IN" ]; then
+          echo "WLG_TARGET<<EOF" >> "$GITHUB_ENV"
+          printf '%s\n' "$TARGET_IN" >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+        fi
+
+        # --- dispatch the central workflow ---
         # START before dispatch: the central run's created_at can predate the curl response
         START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         TITLE="deploy $REPO @ $SHA"
@@ -65,6 +83,8 @@ runs:
                         --arg dev "$IS_DEV" --arg env "$ENV_PAYLOAD" --arg target "$TARGET_IN" --arg ref "$CENTRAL_REF" \
                 '{ref:$ref,inputs:{repo:$repo, sha:$sha, docker_compose_path:$compose, is_dev:$dev, env:$env, target:$target}}')"
         echo -e "🚀 dispatch accepted, waiting for central run: $REPO @ ${SHA:0:7} (is_dev=$IS_DEV)"
+
+        # --- wait for the central run to appear ---
         RUN_ID=""
         for i in $(seq 1 40); do
           RUN_ID="$(GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/workflows/deploy.yml/runs?per_page=20" \
@@ -74,6 +94,9 @@ runs:
           sleep 15
         done
         [ -n "$RUN_ID" ] || { echo "::error::central deploy run not found within 10m"; exit 1; }
+        echo "WLG_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+
+        # --- wait for completion, mirror the result ---
         for i in $(seq 1 40); do
           RESULT="$(GH_TOKEN="$PAT" gh api "repos/wlgdev/deploy/actions/runs/$RUN_ID" --jq '"\(.status)/\(.conclusion)"' 2>/dev/null || true)"
           echo "⏳ central run $RUN_ID: ${RESULT:-api-hiccup} — https://github.com/wlgdev/deploy/actions/runs/$RUN_ID"
@@ -98,3 +121,29 @@ runs:
         ENV_INPUT: ${{ inputs.env }}
         TARGET_IN: ${{ inputs.target }}
         CENTRAL_REF: ${{ inputs.central_ref }}
+
+    - name: 📋 Summary
+      if: always()
+      run: |
+        if [ "${{ steps.deploy.outcome }}" = "success" ]; then
+          echo "## ✅ Deploy OK" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "## ❌ Deploy failed" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        {
+          echo ""
+          echo "- Image: \`${WLG_IMAGE:-—}\`"
+          echo "- Stack: \`${WLG_TITLE:-—}\` (is_dev=${{ inputs.is_dev }})"
+          if [ -n "${WLG_RUN_ID:-}" ]; then
+            echo "- Central run: ${{ github.server_url }}/wlgdev/deploy/actions/runs/$WLG_RUN_ID"
+          else
+            echo "- Central run: not found (dispatch may have failed)"
+          fi
+          if [ -n "${WLG_TARGET:-}" ]; then
+            echo "- Traefik target:"
+            echo '```'
+            echo "$WLG_TARGET"
+            echo '```'
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+      shell: bash
