@@ -285,6 +285,7 @@ jobs:
           SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           ENV_INPUT: ${{ inputs.env }}
+          TARGET: ${{ inputs.target }}
           MONITOR: ${{ inputs.monitor }}
           MONITOR_NETWORK: ${{ inputs.monitor_network }}
         run: |
@@ -338,14 +339,14 @@ jobs:
             && mv docker-compose.yml.new docker-compose.yml \
             && if [ -f docker-compose.override.yml.new ]; then mv docker-compose.override.yml.new docker-compose.override.yml; else rm -f docker-compose.override.yml; fi \
             && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi \
-            && if [ -f docker-compose.override.yml ]; then (docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1 || docker network create \"proxy-$APP-network\"); fi \
+            && if [ -n \"$TARGET\" ]; then (docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1 || docker network create \"proxy-$APP-network\"); fi \
             && docker compose pull \
             && docker compose up -d --remove-orphans"
 
           # --- traefik network: attach proxy, or detach + remove when headless ---
           # (runs after up, so removal finds no attached app containers — no orphans)
           $SSH "$REMOTE" "cd /data/apps/$APP \
-            && if [ -f docker-compose.override.yml ]; then \
+            && if [ -n \"$TARGET\" ]; then \
               (docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1 || docker network create \"proxy-$APP-network\") \
               && if docker ps --format '{{.Names}}' | grep -qx coolify-proxy; then \
                 docker inspect -f '{{json .NetworkSettings.Networks}}' coolify-proxy | grep -q \"\\\"proxy-$APP-network\\\"\" \
