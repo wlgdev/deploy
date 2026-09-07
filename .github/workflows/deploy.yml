@@ -183,6 +183,11 @@ jobs:
                   f"      - \"traefik.http.routers.{route}.tls=true\"",
                   f"      - \"traefik.http.routers.{route}.tls.certresolver=letsencrypt\"",
                   f"      - \"traefik.http.routers.{route}.entrypoints=websecure\"",
+                  f"      - \"traefik.http.routers.{route}-http.rule=Host(`{host}`)\"",
+                  f"      - \"traefik.http.routers.{route}-http.entrypoints=web\"",
+                  f"      - \"traefik.http.routers.{route}-http.middlewares={route}-https\"",
+                  f"      - \"traefik.http.middlewares.{route}-https.redirectscheme.scheme=https\"",
+                  f"      - \"traefik.http.middlewares.{route}-https.redirectscheme.permanent=true\"",
                   f"      - \"traefik.docker.network={network_name}\"",
               ])
 
