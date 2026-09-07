@@ -231,6 +231,7 @@ jobs:
             && mv docker-compose.yml.new docker-compose.yml \
             && if [ -f docker-compose.override.yml.new ]; then mv docker-compose.override.yml.new docker-compose.override.yml; else rm -f docker-compose.override.yml; fi \
             && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi \
+            && if [ -f docker-compose.override.yml ]; then (docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1 || docker network create \"proxy-$APP-network\"); fi \
             && docker compose pull \
             && docker compose up -d --remove-orphans"
 
