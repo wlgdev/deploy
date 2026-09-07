@@ -23,7 +23,7 @@ on:
         type: choice
         options: ['false', 'true']
       env:
-        description: 'Extra KEY=VALUE lines, written to .env next to compose'
+        description: 'Extra KEY=VALUE lines, exported for docker compose at deploy time (not stored on server)'
         required: false
         default: ''
         type: string
@@ -146,8 +146,6 @@ jobs:
                   f"      - \"traefik.http.routers.{route}.tls=true\"",
                   f"      - \"traefik.http.routers.{route}.tls.certresolver=letsencrypt\"",
                   f"      - \"traefik.http.routers.{route}.entrypoints=websecure\"",
-                  f"      - \"traefik.http.routers.{route}.middlewares=redirect-to-https\"",
-                  "      - \"traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https\"",
                   f"      - \"traefik.docker.network={network_name}\"",
               ])
 
@@ -184,5 +182,5 @@ jobs:
             printf '%s' "$ENV_INPUT" | $SSH "$REMOTE" "cat > /data/apps/$APP/.env.tmp && chmod 600 /data/apps/$APP/.env.tmp"
           fi
           echo "📄 compose uploaded → /data/apps/$APP/docker-compose.yml"
-          $SSH "$REMOTE" "cd /data/apps/$APP && rm -f .env && mv docker-compose.yml.new docker-compose.yml && if [ -f docker-compose.override.yml.new ]; then mv docker-compose.override.yml.new docker-compose.override.yml && NET=\"proxy-$APP-network\" && (docker network inspect \"\$NET\" >/dev/null 2>&1 || docker network create \"\$NET\") && (if docker ps --format '{{.Names}}' | grep -qw coolify-proxy; then docker inspect -f '{{json .NetworkSettings.Networks}}' coolify-proxy | grep -qw \"\$NET\" || docker network connect \"\$NET\" coolify-proxy; fi); else rm -f docker-compose.override.yml; if docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1; then docker network disconnect \"proxy-$APP-network\" coolify-proxy 2>/dev/null || true; docker network rm \"proxy-$APP-network\" 2>/dev/null || true; fi; fi && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi && docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker image prune -a -f --filter \"until=168h\" && docker compose ps"
+          $SSH "$REMOTE" "cd /data/apps/$APP && rm -f .env && mv docker-compose.yml.new docker-compose.yml && if [ -f docker-compose.override.yml.new ]; then mv docker-compose.override.yml.new docker-compose.override.yml; else rm -f docker-compose.override.yml; fi && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi && docker compose pull && docker compose up -d --remove-orphans && if [ -f docker-compose.override.yml ]; then (docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1 || docker network create \"proxy-$APP-network\") && if docker ps --format '{{.Names}}' | grep -qx coolify-proxy; then docker inspect -f '{{json .NetworkSettings.Networks}}' coolify-proxy | grep -q \"\\\"proxy-$APP-network\\\"\" || docker network connect \"proxy-$APP-network\" coolify-proxy; fi; else if docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1; then docker network disconnect \"proxy-$APP-network\" coolify-proxy 2>/dev/null || true; docker network rm \"proxy-$APP-network\"; fi; fi && docker image prune -f && docker image prune -a -f --filter \"until=168h\" && docker compose ps"
           echo -e "\033[1;32m✅ $APP is up\033[0m"

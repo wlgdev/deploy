@@ -17,14 +17,14 @@
 3. **Центральный пайплайн (`deploy.yml`)**:
    - Валидация входных параметров (принадлежность к `wlgdev`, regex-проверка имени, корректность SHA, валидация формата `target`).
    - Скачивание репозитория проекта на указанном коммите.
-   - Если задан `target`: генерация `docker-compose.override.yml` с лейблами Traefik (LetsEncrypt, HTTPS-редирект, Host-правило).
+   - Если задан `target`: генерация `docker-compose.override.yml` с лейблами Traefik (Host-правило, TLS, выпуск сертификата Let's Encrypt).
    - Подключение по SSH к серверу под пользователем `deploy`.
    - Создание директории `/data/apps/<app>-dev`.
    - Загрузка `docker-compose.yml.new` и атомарная замена на `docker-compose.yml`.
-   - Если передан `target`: загрузка `docker-compose.override.yml.new` → `mv` в `docker-compose.override.yml`, создание Docker-сети `proxy-<app>-dev-network` и подключение к ней контейнера `coolify-proxy`.
-   - Если `target` не передан: удаление `docker-compose.override.yml` (чистый headless-деплой).
+   - Если передан `target`: загрузка `docker-compose.override.yml.new` → `mv` в `docker-compose.override.yml`; после перезапуска стека — создание Docker-сети `proxy-<app>-dev-network` и подключение к ней контейнера `coolify-proxy`.
+   - Если `target` не передан: удаление `docker-compose.override.yml`, отключение `coolify-proxy` и удаление прокси-сети после перезапуска стека (чистый headless-деплой, мусор не остаётся).
    - Экспорт переменных окружения в текущую сессию.
-   - Выполнение `docker compose pull && docker compose up -d --remove-orphans && docker image prune -f`.
+   - Выполнение `docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker image prune -a -f --filter "until=168h"`.
 4. **Завершение**:
    - Экшен в проекте получает статус завершения и выводит ссылку на центральный лог. Прод-стек остаётся нетронутым.
 
