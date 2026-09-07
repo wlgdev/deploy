@@ -1,5 +1,5 @@
 name: deploy to wlgdev server
-description: Triggers a deploy in wlgdev/deploy (headless, or Traefik-routed when target is set) and waits for its result. Caller repo needs DEPLOY_TRIGGER_PAT secret (fine-grained PAT, Actions write on wlgdev/deploy).
+description: Triggers a deploy in wlgdev/deploy (headless, or Traefik-routed when target is set) and waits for its result. Records a DEV/PRODUCTION GitHub deployment (caller workflow needs permissions: deployments write). Caller repo needs DEPLOY_TRIGGER_PAT secret (fine-grained PAT, Actions write on wlgdev/deploy).
 
 inputs:
   pat:
@@ -37,6 +37,52 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: 📍 Create GitHub deployment
+      run: |
+        set -eu
+
+        # --- DEV vs PRODUCTION label in the repo Deployments section ---
+        if [ "$IS_DEV" = "true" ]; then ENV_NAME="DEV"; else ENV_NAME="PRODUCTION"; fi
+
+        # --- "View deployment" button: first traefik route, if any ---
+        ENV_URL=""
+        FIRST_LINE="$(printf '%s' "$TARGET_IN" | grep -v '^[[:space:]]*$' | head -1 || true)"
+        if [ -n "$FIRST_LINE" ]; then
+          SUB="${FIRST_LINE%%:*}"
+          SUB="${SUB%.dev.wlg.tv}"
+          SUB="${SUB%.wlg.tv}"
+          if [ "$IS_DEV" = "true" ]; then SUFFIX="dev.wlg.tv"; else SUFFIX="wlg.tv"; fi
+          ENV_URL="https://$SUB.$SUFFIX"
+        fi
+
+        echo "WLG_ENV_NAME=$ENV_NAME" >> "$GITHUB_ENV"
+        if [ -n "$ENV_URL" ]; then echo "WLG_ENV_URL=$ENV_URL" >> "$GITHUB_ENV"; fi
+
+        # --- cosmetics must not block the deploy: warn and continue untracked on failure ---
+        PAYLOAD="$(jq -n --arg ref "$SHA" --arg env "$ENV_NAME" --arg desc "deploy $REPO @ $SHA" \
+          '{ref:$ref, environment:$env, auto_merge:false, required_contexts:[],
+            transient_environment:($env == "DEV"), production_environment:($env == "PRODUCTION"),
+            description:$desc}')"
+        DEPLOY_ID="$(GH_TOKEN="$GH_TOKEN" gh api -X POST "repos/$REPO/deployments" --input - --jq '.id' <<< "$PAYLOAD" 2>/dev/null || true)"
+        if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
+          echo "WLG_DEPLOYMENT_ID=$DEPLOY_ID" >> "$GITHUB_ENV"
+          STATUS="$(jq -n --arg log "$SERVER_URL/wlgdev/deploy/actions" \
+            '{state:"in_progress", description:"deploy is running", log_url:$log}')"
+          GH_TOKEN="$GH_TOKEN" gh api -X POST "repos/$REPO/deployments/$DEPLOY_ID/statuses" --input - <<< "$STATUS" > /dev/null \
+            || echo "::warning::could not set deployment status to in_progress"
+          echo "📍 deployment $DEPLOY_ID ($ENV_NAME) created"
+        else
+          echo "::warning::could not create GitHub deployment (caller workflow needs permissions: deployments write)"
+        fi
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ github.sha }}
+        IS_DEV: ${{ inputs.is_dev }}
+        TARGET_IN: ${{ inputs.target }}
+        SERVER_URL: ${{ github.server_url }}
+
     - name: 🚀 Deploy via wlgdev/deploy
       id: deploy
       run: |
@@ -122,6 +168,31 @@ runs:
         TARGET_IN: ${{ inputs.target }}
         CENTRAL_REF: ${{ inputs.central_ref }}
 
+    - name: 📍 Update GitHub deployment
+      if: always()
+      run: |
+        set -eu
+
+        [ -n "${WLG_DEPLOYMENT_ID:-}" ] || { echo "no deployment to update"; exit 0; }
+
+        # --- mirror the deploy result into the Deployments section ---
+        case "${{ steps.deploy.outcome }}" in
+          success) STATE="success"; DESC="deploy OK";;
+          *) STATE="failure"; DESC="deploy failed";;
+        esac
+        LOG_URL="$SERVER_URL/wlgdev/deploy/actions"
+        if [ -n "${WLG_RUN_ID:-}" ]; then LOG_URL="$LOG_URL/runs/$WLG_RUN_ID"; fi
+        STATUS="$(jq -n --arg state "$STATE" --arg desc "$DESC" --arg log "$LOG_URL" --arg url "${WLG_ENV_URL:-}" \
+          '{state:$state, description:$desc, log_url:$log} + (if $url == "" then {} else {environment_url:$url} end)')"
+        GH_TOKEN="$GH_TOKEN" gh api -X POST "repos/$REPO/deployments/$WLG_DEPLOYMENT_ID/statuses" --input - <<< "$STATUS" > /dev/null \
+          || echo "::warning::could not update deployment status"
+        echo "📍 deployment $WLG_DEPLOYMENT_ID → $STATE"
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        SERVER_URL: ${{ github.server_url }}
+
     - name: 📋 Summary
       if: always()
       run: |
@@ -134,6 +205,7 @@ runs:
           echo ""
           echo "- Image: \`${WLG_IMAGE:-—}\`"
           echo "- Stack: \`${WLG_TITLE:-—}\` (is_dev=${{ inputs.is_dev }})"
+          echo "- Environment: \`${WLG_ENV_NAME:-—}\`"
           echo "- Commit: [\`${GITHUB_SHA:0:7}\`](${{ github.server_url }}/${{ github.repository }}/commit/$GITHUB_SHA)"
           if [ -n "${WLG_RUN_ID:-}" ]; then
             echo "- Central run: [open logs](${{ github.server_url }}/wlgdev/deploy/actions/runs/$WLG_RUN_ID)"
