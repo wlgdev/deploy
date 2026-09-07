@@ -1,5 +1,5 @@
 name: publish image to ghcr.io
-description: Builds a Docker image and pushes it to ghcr.io (sha tag always, dev floating tag on is_dev=true, latest on prod), then prunes old versions. Caller workflow needs permissions: contents read, packages write, actions write (build cache).
+description: "Builds a Docker image and pushes it to ghcr.io (sha tag always, dev floating tag on is_dev=true, latest on prod), then prunes old versions. Caller workflow needs permissions: contents read, packages write, actions write (build cache)."
 
 inputs:
   dockerfile:

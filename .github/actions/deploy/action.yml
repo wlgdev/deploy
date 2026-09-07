@@ -1,5 +1,5 @@
 name: deploy to wlgdev server
-description: Triggers a deploy in wlgdev/deploy (headless, or Traefik-routed when target is set) and waits for its result. Records a DEV/PRODUCTION GitHub deployment (caller workflow needs permissions: deployments write). Caller repo needs DEPLOY_TRIGGER_PAT secret (fine-grained PAT, Actions write on wlgdev/deploy).
+description: "Triggers a deploy in wlgdev/deploy (headless, or Traefik-routed when target is set) and waits for its result. Records a DEV/PRODUCTION GitHub deployment (caller workflow needs permissions: deployments write). Caller repo needs DEPLOY_TRIGGER_PAT secret (fine-grained PAT, Actions write on wlgdev/deploy)."
 
 inputs:
   pat:
