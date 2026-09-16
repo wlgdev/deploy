@@ -17,7 +17,7 @@
    - uses: actions/checkout@v7
    - uses: wlgdev/deploy/.github/actions/publish@main
      with:
-       is_dev: "true"   # 'false' — на релизе
+       is_dev: "true" # 'false' — на релизе
    ```
    В workflow нужны `permissions: contents:read, packages:write, actions:write, deployments:write` (последнее — для раздела Deployments: `DEV`/`PRODUCTION`).
    Dockerfile не в корне — передай `dockerfile: 'docker/Dockerfile'` (контекст всегда корень репо).
@@ -87,26 +87,26 @@ jobs:
       - uses: wlgdev/deploy/.github/actions/deploy@main
         with:
           pat: ${{ secrets.DEPLOY_TRIGGER_PAT }}
-          is_dev: 'false'
+          is_dev: "false"
 ```
 
 Тег релиза подставится сам.
 
 ## Параметры экшена
 
-| Input | Default | Что это |
-|---|---|---|
-| `pat` | — | всегда `${{ secrets.DEPLOY_TRIGGER_PAT }}` |
-| `docker_compose_path` | `docker-compose.yml` | если compose не в корне |
-| `is_dev` | `'true'` | `'false'` → прод-стек `<app>` вместо `<app>-dev` |
-| `target` | — | `SUBDOMAIN:SERVICE:PORT` для Traefik (пусто = headless) |
-| `monitor` | `'false'` | `'true'` → все сервисы в сеть монитора + `OTLP_ENDPOINT` (OTLP логи/метрики) |
-| `monitor_network` | `monitor_default` | внешняя сеть монитора (нужен `monitor: 'true'`) |
-| `monitor_endpoint` | `otel-collector:4318` | OTLP HTTP-эндпоинт как `OTLP_ENDPOINT` (нужен `monitor: 'true'`) |
-| `service_image_name` | `ghcr.io/wlgdev/<твой-проект>` | какой образ тянуть; свой registry — передай явно |
-| `service_image_tag` | короткий sha (на релизе — тег релиза) | какой тег тянуть; переопредели, если тегаешь иначе |
-| `env` | — | `K=V` построчно → только на время запуска, на диске не хранятся |
-| `central_ref` | `main` | не трогать |
+| Input                 | Default                               | Что это                                                                                    |
+| --------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `pat`                 | —                                     | всегда `${{ secrets.DEPLOY_TRIGGER_PAT }}`                                                 |
+| `docker_compose_path` | `docker-compose.yml`                  | если compose не в корне                                                                    |
+| `is_dev`              | `'true'`                              | `'false'` → прод-стек `<app>` вместо `<app>-dev`                                           |
+| `target`              | —                                     | `SUBDOMAIN:SERVICE:PORT` для Traefik (пусто = headless)                                    |
+| `monitor`             | `'false'`                             | `'true'` → все сервисы в сеть монитора + `OTEL_EXPORTER_OTLP_ENDPOINT` (OTLP логи/метрики) |
+| `monitor_network`     | `monitor_default`                     | внешняя сеть монитора (нужен `monitor: 'true'`)                                            |
+| `monitor_endpoint`    | `otel-collector:4318`                 | OTLP HTTP-эндпоинт как `OTEL_EXPORTER_OTLP_ENDPOINT` (нужен `monitor: 'true'`)             |
+| `service_image_name`  | `ghcr.io/wlgdev/<твой-проект>`        | какой образ тянуть; свой registry — передай явно                                           |
+| `service_image_tag`   | короткий sha (на релизе — тег релиза) | какой тег тянуть; переопредели, если тегаешь иначе                                         |
+| `env`                 | —                                     | `K=V` построчно → только на время запуска, на диске не хранятся                            |
+| `central_ref`         | `main`                                | не трогать                                                                                 |
 
 ## Правила
 

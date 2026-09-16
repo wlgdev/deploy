@@ -32,7 +32,7 @@ inputs:
   monitor:
     required: false
     default: 'false'
-    description: "'true' = attach services to monitor network and inject OTLP_ENDPOINT (OTLP logs+metrics)"
+    description: "'true' = attach services to monitor network and inject OTEL_EXPORTER_OTLP_ENDPOINT (OTLP logs+metrics)"
   monitor_network:
     required: false
     default: 'monitor_default'
@@ -40,7 +40,7 @@ inputs:
   monitor_endpoint:
     required: false
     default: 'otel-collector:4318'
-    description: 'OTLP HTTP endpoint injected as OTLP_ENDPOINT (needs monitor=true)'
+    description: 'OTLP HTTP endpoint injected as OTEL_EXPORTER_OTLP_ENDPOINT (needs monitor=true)'
   central_ref:
     required: false
     default: 'main'

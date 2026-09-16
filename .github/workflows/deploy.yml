@@ -33,7 +33,7 @@ on:
         default: ''
         type: string
       monitor:
-        description: "'true' = attach services to monitor network and inject OTLP_ENDPOINT"
+        description: "'true' = attach services to monitor network and inject OTEL_EXPORTER_OTLP_ENDPOINT"
         required: false
         default: 'false'
         type: choice
@@ -44,7 +44,7 @@ on:
         default: 'monitor_default'
         type: string
       monitor_endpoint:
-        description: 'OTLP HTTP endpoint injected as OTLP_ENDPOINT'
+        description: 'OTLP HTTP endpoint injected as OTEL_EXPORTER_OTLP_ENDPOINT'
         required: false
         default: 'otel-collector:4318'
         type: string
@@ -236,7 +236,7 @@ jobs:
                   sys.exit("monitor is on but no services found in compose")
               for service in names:
                   attach(service, mnet)
-                  svc_env.setdefault(service, []).append(f"OTLP_ENDPOINT={mep}")
+                  svc_env.setdefault(service, []).append(f"OTEL_EXPORTER_OTLP_ENDPOINT={mep}")
 
           def emit(path, with_monitor):
               mnet = os.environ.get("MONITOR_NETWORK", "")
