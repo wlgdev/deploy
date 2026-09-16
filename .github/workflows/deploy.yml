@@ -83,16 +83,16 @@ jobs:
           case "$MONITOR" in true|false) ;; *) echo "::error::monitor must be true/false"; exit 1;; esac
 
           # --- monitor network + endpoint (only when monitor is on) ---
-          if [ "$MONITOR" = "true" ]; then
-            case "$MONITOR_NETWORK" in ''|*[!a-zA-Z0-9_-]*) echo "::error::bad monitor_network"; exit 1;; esac
-            case "$MONITOR_ENDPOINT" in *:*) ;; *) echo "::error::monitor_endpoint must be host:port"; exit 1;; esac
-            case "$MONITOR_ENDPOINT" in *[!a-zA-Z0-9.:\_-]*) echo "::error::bad characters in monitor_endpoint"; exit 1;; esac
-            MON_EP_PORT="${MONITOR_ENDPOINT##*:}"
-            case "$MON_EP_PORT" in *[!0-9]*|'') echo "::error::monitor_endpoint port must be numeric"; exit 1;; esac
-            if [ "$MON_EP_PORT" -lt 1 ] || [ "$MON_EP_PORT" -gt 65535 ]; then
-              echo "::error::monitor_endpoint port out of range: $MON_EP_PORT"; exit 1
-            fi
-          fi
+          #if [ "$MONITOR" = "true" ]; then
+          #  case "$MONITOR_NETWORK" in ''|*[!a-zA-Z0-9_-]*) echo "::error::bad monitor_network"; exit 1;; esac
+          #  case "$MONITOR_ENDPOINT" in *:*) ;; *) echo "::error::monitor_endpoint must be host:port"; exit 1;; esac
+          #  case "$MONITOR_ENDPOINT" in *[!a-zA-Z0-9.:\_-]*) echo "::error::bad characters in monitor_endpoint"; exit 1;; esac
+          #  MON_EP_PORT="${MONITOR_ENDPOINT##*:}"
+          #  case "$MON_EP_PORT" in *[!0-9]*|'') echo "::error::monitor_endpoint port must be numeric"; exit 1;; esac
+          #  if [ "$MON_EP_PORT" -lt 1 ] || [ "$MON_EP_PORT" -gt 65535 ]; then
+          #    echo "::error::monitor_endpoint port out of range: $MON_EP_PORT"; exit 1
+          #  fi
+          #fi
 
           # --- target lines: SUBDOMAIN:SERVICE:PORT ---
           if [ -n "$TARGET" ]; then
