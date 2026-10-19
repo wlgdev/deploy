@@ -58,21 +58,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 🔒 Mask env values
+        env:
+          ENV_INPUT: ${{ inputs.env }}
         run: |
           set -eu
 
           # env приходит обычным input-ом workflow_dispatch, а не секретом — GitHub не маскирует
-          # его значения в логах центрального репозитория. Берём их из payload события, а не из
-          # env/script: иначе значения попали бы в лог ещё до маскирования.
-          PAYLOAD="$(jq -r '.inputs.env // empty' "$GITHUB_EVENT_PATH")"
-          if [ -z "$PAYLOAD" ]; then
-            echo "::warning::no env payload in event — values stay unmasked in logs"
-            echo "event payload keys: $(jq -c 'paths(scalars) | map(tostring) | join(".")' "$GITHUB_EVENT_PATH" | head -20 | tr '\n' ' ')"
-            exit 0
-          fi
+          # его значения в логах центрального репозитория. Регистрируем их как маскируемые:
+          # дальше по логу они видны как ***
           while IFS='=' read -r k v || [ -n "$k" ]; do
             case "$k" in ''|\#*) ;; *) [ -n "$v" ] && echo "::add-mask::$v";; esac
-          done <<< "$PAYLOAD"
+          done <<< "$ENV_INPUT"
 
       - name: 🔍 Validate inputs
         env:
