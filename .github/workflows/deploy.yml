@@ -321,7 +321,8 @@ jobs:
           fi
 
           # --- upload: compose (+ override) and secrets ---
-          $SSH "$REMOTE" "mkdir -p /data/apps/$APP"
+          $SSH "$REMOTE" "mkdir -p /data/apps/$APP" \
+            || { echo "::error::cannot create /data/apps/$APP as $SSH_USER — /data/apps must exist and be owned by $SSH_USER"; exit 1; }
           scp -P "$SSH_PORT" -i ~/.ssh/deploy_key "app/$COMPOSE_PATH" "$REMOTE:/data/apps/$APP/docker-compose.yml.new"
           if [ -n "$OVERRIDE_SRC" ]; then
             scp -P "$SSH_PORT" -i ~/.ssh/deploy_key "$OVERRIDE_SRC" "$REMOTE:/data/apps/$APP/docker-compose.override.yml.new"
