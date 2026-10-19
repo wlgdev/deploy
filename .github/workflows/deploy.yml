@@ -169,6 +169,7 @@ jobs:
           MONITOR_ENDPOINT: ${{ inputs.monitor_endpoint }}
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           PROXY_NETWORK: proxy-network
+          ENV_INPUT: ${{ inputs.env }}
         run: |
           set -eu
 
@@ -261,9 +262,15 @@ jobs:
           echo "📄 docker-compose.override.yml generated"
 
           # --- merged files must parse before they reach the server ---
+          # compose may declare required variables (${VAR:?message}); they arrive with the env
+          # input and are only set on the server at deploy time, so export them here as well
           if [ -f docker-compose.override.yml ]; then
-            SERVICE_IMAGE_NAME=placeholder SERVICE_IMAGE_TAG=placeholder \
-              docker compose -f "app/$COMPOSE_PATH" -f docker-compose.override.yml config -q \
+            while IFS='=' read -r k v || [ -n "$k" ]; do
+              case "$k" in ''|\#*) ;; *) export "$k=$v";; esac
+            done <<< "$ENV_INPUT"
+            export SERVICE_IMAGE_NAME="${SERVICE_IMAGE_NAME:-placeholder}"
+            export SERVICE_IMAGE_TAG="${SERVICE_IMAGE_TAG:-placeholder}"
+            docker compose -f "app/$COMPOSE_PATH" -f docker-compose.override.yml config -q \
               || { echo "::error::merged compose is invalid"; exit 1; }
             echo "✅ merged compose OK"
           fi
