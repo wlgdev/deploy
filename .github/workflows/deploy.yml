@@ -28,7 +28,7 @@ on:
         default: ''
         type: string
       target:
-        description: 'Traefik routing: SUBDOMAIN:SERVICE:PORT lines'
+        description: 'Nginx Proxy Manager routing: SUBDOMAIN:SERVICE:PORT lines'
         required: false
         default: ''
         type: string
@@ -168,8 +168,11 @@ jobs:
           MONITOR_NETWORK: ${{ inputs.monitor_network }}
           MONITOR_ENDPOINT: ${{ inputs.monitor_endpoint }}
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
+          PROXY_NETWORK: proxy-network
         run: |
           set -eu
+
+          echo "PROXY_NETWORK=$PROXY_NETWORK" >> "$GITHUB_ENV"
 
           # --- pyyaml for reading service names out of the caller compose ---
           python3 -c "import yaml" 2>/dev/null || pip install -q pyyaml
@@ -183,13 +186,11 @@ jobs:
           monitor = os.environ.get("MONITOR") == "true"
 
           app = os.environ["APP"]
-          is_dev = os.environ.get("IS_DEV") == "true"
-          domain_suffix = "dev.wlg.tv" if is_dev else "wlg.tv"
-          network_name = f"proxy-{app}-network"
+          proxy_network = os.environ["PROXY_NETWORK"]
 
           networks = []      # external net names, in order
           svc_nets = {}      # service -> [extra nets]
-          svc_labels = {}    # service -> [label strings]
+          svc_alias = {}     # service -> [dns aliases on the proxy network]
           svc_env = {}       # service -> [KEY=VALUE strings]
 
           def attach(service, net):
@@ -208,23 +209,11 @@ jobs:
                   sys.exit(f"Invalid target entry: {line}")
               subdomain, service, port = parts
               subdomain = subdomain.removesuffix(".dev.wlg.tv").removesuffix(".wlg.tv")
-              host = f"{subdomain}.{domain_suffix}"
-              route = f"{app}-{service}"
-              attach(service, network_name)
-              svc_labels.setdefault(service, []).extend([
-                  "traefik.enable=true",
-                  f"traefik.http.services.{route}.loadbalancer.server.port={port}",
-                  f"traefik.http.routers.{route}.rule=Host(`{host}`)",
-                  f"traefik.http.routers.{route}.tls=true",
-                  f"traefik.http.routers.{route}.tls.certresolver=letsencrypt",
-                  f"traefik.http.routers.{route}.entrypoints=websecure",
-                  f"traefik.http.routers.{route}-http.rule=Host(`{host}`)",
-                  f"traefik.http.routers.{route}-http.entrypoints=web",
-                  f"traefik.http.routers.{route}-http.middlewares={route}-https",
-                  f"traefik.http.middlewares.{route}-https.redirectscheme.scheme=https",
-                  f"traefik.http.middlewares.{route}-https.redirectscheme.permanent=true",
-                  f"traefik.docker.network={network_name}",
-              ])
+              attach(service, proxy_network)
+              aliases = svc_alias.setdefault(service, [])
+              alias = f"{app}-{service}"
+              if alias not in aliases:
+                  aliases.append(alias)
 
           if monitor:
               mnet = os.environ["MONITOR_NETWORK"]
@@ -248,15 +237,16 @@ jobs:
               any_svc = False
               for service, extra in svc_nets.items():
                   extra = [n for n in extra if with_monitor or n != mnet]
-                  labels = svc_labels.get(service, [])
                   envs = svc_env.get(service, []) if with_monitor else []
-                  if not extra and not labels and not envs:
+                  if not extra and not envs:
                       continue
                   any_svc = True
-                  lines += [f"  {service}:", "    networks:", "      - default"]
-                  lines += [f"      - {n}" for n in extra]
-                  if labels:
-                      lines += ["    labels:"] + [f"      - \"{l}\"" for l in labels]
+                  lines += [f"  {service}:", "    networks:"]
+                  for n in extra:
+                      lines += [f"      {n}:"]
+                      if n == proxy_network:
+                          aliases = svc_alias.get(service, [])
+                          lines += ["        aliases:"] + [f"          - \"{a}\"" for a in aliases]
                   if envs:
                       lines += ["    environment:"] + [f"      - {e}" for e in envs]
               with open(path, "w", encoding="utf-8") as f:
@@ -265,15 +255,16 @@ jobs:
 
           emit("docker-compose.override.yml", True)
           if monitor:
-              # traefik-only fallback for when the monitor network is missing on the server
+              # no-monitor fallback for when the monitor network is missing on the server
               emit("docker-compose.override.fallback.yml", False)
           EOF
           echo "📄 docker-compose.override.yml generated"
 
           # --- merged files must parse before they reach the server ---
-          if [ "$MONITOR" = "true" ]; then
-            docker compose -f "app/$COMPOSE_PATH" -f docker-compose.override.yml config -q \
-              || { echo "::error::merged compose is invalid (monitor block)"; exit 1; }
+          if [ -f docker-compose.override.yml ]; then
+            SERVICE_IMAGE_NAME=placeholder SERVICE_IMAGE_TAG=placeholder \
+              docker compose -f "app/$COMPOSE_PATH" -f docker-compose.override.yml config -q \
+              || { echo "::error::merged compose is invalid"; exit 1; }
             echo "✅ merged compose OK"
           fi
 
@@ -288,6 +279,7 @@ jobs:
           TARGET: ${{ inputs.target }}
           MONITOR: ${{ inputs.monitor }}
           MONITOR_NETWORK: ${{ inputs.monitor_network }}
+          PROXY_NETWORK: ${{ env.PROXY_NETWORK }}
         run: |
           set -eu
 
@@ -302,7 +294,14 @@ jobs:
           SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=yes"
           REMOTE="$SSH_USER@$SSH_HOST"
 
-          # --- override pick: full monitor variant, or traefik-only fallback ---
+          # --- proxy network must exist: the stack cannot be attached to a missing external net ---
+          if [ -n "$TARGET" ]; then
+            $SSH "$REMOTE" "docker network inspect \"$PROXY_NETWORK\" >/dev/null 2>&1" \
+              || { echo "::error::docker network $PROXY_NETWORK not found on the server — routing needs it"; exit 1; }
+            echo "🔗 proxy network $PROXY_NETWORK OK"
+          fi
+
+          # --- override pick: full monitor variant, or no-monitor fallback ---
           # (a missing monitor network must never block the app deploy)
           OVERRIDE_SRC=""
           if [ -f docker-compose.override.yml ]; then OVERRIDE_SRC="docker-compose.override.yml"; fi
@@ -339,25 +338,8 @@ jobs:
             && mv docker-compose.yml.new docker-compose.yml \
             && if [ -f docker-compose.override.yml.new ]; then mv docker-compose.override.yml.new docker-compose.override.yml; else rm -f docker-compose.override.yml; fi \
             && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi \
-            && if [ -n \"$TARGET\" ]; then (docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1 || docker network create \"proxy-$APP-network\"); fi \
             && docker compose pull \
             && docker compose up -d --remove-orphans"
-
-          # --- traefik network: attach proxy, or detach + remove when headless ---
-          # (runs after up, so removal finds no attached app containers — no orphans)
-          $SSH "$REMOTE" "cd /data/apps/$APP \
-            && if [ -n \"$TARGET\" ]; then \
-              (docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1 || docker network create \"proxy-$APP-network\") \
-              && if docker ps --format '{{.Names}}' | grep -qx coolify-proxy; then \
-                docker inspect -f '{{json .NetworkSettings.Networks}}' coolify-proxy | grep -q \"\\\"proxy-$APP-network\\\"\" \
-                || docker network connect \"proxy-$APP-network\" coolify-proxy; \
-              fi; \
-            else \
-              if docker network inspect \"proxy-$APP-network\" >/dev/null 2>&1; then \
-                docker network disconnect \"proxy-$APP-network\" coolify-proxy 2>/dev/null || true; \
-                docker network rm \"proxy-$APP-network\"; \
-              fi; \
-            fi"
 
           # --- drop old images, show + record status ---
           $SSH "$REMOTE" "cd /data/apps/$APP \
@@ -373,6 +355,146 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           echo -e "\033[1;32m✅ $APP is up\033[0m"
+
+      - name: 🌐 Sync Nginx Proxy Manager
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          APP: ${{ env.APP }}
+          IS_DEV: ${{ inputs.is_dev }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -eu
+
+          # --- ssh setup ---
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          : "${SSH_USER:=deploy}"
+          : "${SSH_PORT:=22}"
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=yes"
+          REMOTE="$SSH_USER@$SSH_HOST"
+
+          # --- no credentials and nothing managed yet: routing is simply off, stay quiet ---
+          HAS_CONF="$($SSH "$REMOTE" 'test -s ~/wlgdev/npm-api.conf && echo yes || echo no')"
+          HAS_STATE="$($SSH "$REMOTE" "test -s /data/apps/$APP/.npm-hosts && echo yes || echo no")"
+          if [ "$HAS_CONF" != "yes" ] && [ "$HAS_STATE" != "yes" ]; then
+            echo "::notice::no Nginx Proxy Manager credentials on the server — proxy hosts are not managed"
+            exit 0
+          fi
+          if [ "$HAS_CONF" != "yes" ]; then
+            echo "::error::~/wlgdev/npm-api.conf is missing on the server, but this stack owns proxy hosts"
+            exit 1
+          fi
+
+          TARGET_B64="$(printf '%s' "$TARGET" | base64 -w0)"
+          $SSH "$REMOTE" "APP='$APP' IS_DEV='$IS_DEV' TARGET_B64='$TARGET_B64' bash -s" <<'REMOTE_SCRIPT'
+          set -eu
+
+          NPM_DIR="$HOME/wlgdev"
+          NPM="$NPM_DIR/npm-api.sh"
+          STATE="/data/apps/$APP/.npm-hosts"
+          mkdir -p "/data/apps/$APP"
+          NPM_URL='https://raw.githubusercontent.com/Erreur32/nginx-proxy-manager-Bash-API/main/npm-api.sh'
+
+          if [ ! -x "$NPM" ]; then
+            mkdir -p "$NPM_DIR"
+            curl -fsSL -o "$NPM" "$NPM_URL"
+            chmod +x "$NPM"
+            echo "⬇️  npm-api.sh downloaded to $NPM"
+          fi
+
+          SUFFIX='wlg.tv'
+          if [ "$IS_DEV" = 'true' ]; then SUFFIX='dev.wlg.tv'; fi
+
+          WORK="$(mktemp -d)"
+          trap 'rm -rf "$WORK"' EXIT
+          DESIRED="$WORK/desired"
+          NEXT="$WORK/next"
+          HOSTS="$WORK/hosts.json"
+          : > "$DESIRED"
+
+          # --- desired state: <domain>\t<dns alias>\t<port> ---
+          printf '%s' "$TARGET_B64" | base64 -d | while IFS= read -r line || [ -n "$line" ]; do
+            [ -z "$line" ] && continue
+            sub="${line%%:*}"
+            rest="${line#*:}"
+            svc="${rest%%:*}"
+            port="${rest##*:}"
+            sub="${sub%.dev.wlg.tv}"
+            sub="${sub%.wlg.tv}"
+            printf '%s\t%s\t%s\n' "$sub.$SUFFIX" "$APP-$svc" "$port" >> "$DESIRED"
+          done
+
+          # --- the CLI may print token banners before the payload, so cut to the JSON array ---
+          npm_json() {
+            "$NPM" "$@" --json | awk 'started || /^[[:space:]]*\[/ { started = 1; print }'
+          }
+          host_field() {
+            jq -r --arg d "$1" --arg f "$2" 'first(.[] | select(.domain_names | index($d)) | .[$f]) // empty' "$HOSTS"
+          }
+
+          npm_json --host-list > "$HOSTS"
+
+          while IFS=$(printf '\t') read -r domain alias port; do
+            [ -z "$domain" ] && continue
+            id="$(host_field "$domain" id)"
+            if [ -z "$id" ]; then
+              echo "➕ $domain → $alias:$port (хост + сертификат)"
+              "$NPM" --host-create "$domain" -i "$alias" -p "$port" --cert-generate "$domain" --host-ssl-enable -y
+              continue
+            fi
+            cur_host="$(host_field "$domain" forward_host)"
+            cur_port="$(host_field "$domain" forward_port)"
+            if [ "$cur_host" != "$alias" ]; then
+              echo "🔁 $domain: forward_host $cur_host → $alias"
+              "$NPM" --host-update "$id" "forward_host=$alias"
+            fi
+            if [ "$cur_port" != "$port" ]; then
+              echo "🔁 $domain: forward_port $cur_port → $port"
+              "$NPM" --host-update "$id" "forward_port=$port"
+            fi
+            cert="$(host_field "$domain" certificate_id)"
+            if [ -z "$cert" ] || [ "$cert" = '0' ]; then
+              echo "🔐 $domain: выпускаем сертификат"
+              "$NPM" --cert-generate "$domain"
+              cert_id="$(npm_json --cert-list | jq -r --arg d "$domain" 'first(.[] | select(.domain_names | index($d)) | .id) // empty')"
+              "$NPM" --host-ssl-enable "$id" "$cert_id"
+            fi
+          done < "$DESIRED"
+
+          # --- refresh, record what we own, drop hosts the stack no longer declares ---
+          npm_json --host-list > "$HOSTS"
+          : > "$NEXT"
+          while IFS=$(printf '\t') read -r domain alias port; do
+            [ -z "$domain" ] && continue
+            id="$(host_field "$domain" id)"
+            [ -n "$id" ] && printf '%s %s\n' "$domain" "$id" >> "$NEXT"
+          done < "$DESIRED"
+
+          if [ -s "$STATE" ]; then
+            while read -r domain id; do
+              [ -z "$domain" ] && continue
+              if ! awk -v d="$domain" '$1 == d { found = 1 } END { exit !found }' "$NEXT"; then
+                echo "🗑️  $domain — больше не в target, удаляем хост"
+                "$NPM" --host-delete "$id"
+              fi
+            done < "$STATE"
+          fi
+          cp "$NEXT" "$STATE"
+          REMOTE_SCRIPT
+
+          {
+            echo ""
+            echo "### 🌐 Nginx Proxy Manager"
+            printf '%s\n' "$TARGET" | grep -v '^[[:space:]]*$' | while IFS= read -r line; do
+              sub="${line%%:*}"
+              case "$IS_DEV" in true) echo "- https://$sub.dev.wlg.tv";; *) echo "- https://$sub.wlg.tv";; esac
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: ❌ Failure summary
         if: failure()

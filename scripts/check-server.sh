@@ -9,6 +9,9 @@
 #   sudo -u deploy docker ps | head -3
 #   sudo -u deploy docker compose version
 #   sudo -u deploy grep -q ghcr.io /home/deploy/.docker/config.json && echo GHCR_OK
+#   docker network inspect proxy-network >/dev/null && echo PROXY_NET_OK
+#   sudo -u deploy test -s /home/deploy/wlgdev/npm-api.conf && echo NPM_CONF_OK
+#   curl -sf http://127.0.0.1:81/api/ >/dev/null && echo NPM_API_OK
 set -eu
 fail=0
 need() { if eval "$2" >/dev/null 2>&1; then echo "OK:   $1"; else echo "MISS: $1"; fail=1; fi }
@@ -20,5 +23,8 @@ need "deploy authorized_keys present" "[ -s /home/deploy/.ssh/authorized_keys ]"
 need "docker works for deploy"       "sudo -u deploy docker ps"
 need "compose plugin for deploy"     "sudo -u deploy docker compose version"
 need "ghcr.io auth for deploy"       "grep -q ghcr.io /home/deploy/.docker/config.json"
+need "proxy network for deploy"      "docker network inspect proxy-network"
+need "NPM credentials for deploy"    "sudo -u deploy test -s /home/deploy/wlgdev/npm-api.conf"
+need "NPM admin API reachable"       "curl -sf http://127.0.0.1:81/api/"
 
 if [ "$fail" -eq 0 ]; then echo ALL_OK; else echo "--- fix MISS lines, re-run ---"; exit 1; fi

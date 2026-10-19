@@ -99,7 +99,7 @@ jobs:
 | `pat`                 | —                                     | всегда `${{ secrets.DEPLOY_TRIGGER_PAT }}`                                                 |
 | `docker_compose_path` | `docker-compose.yml`                  | если compose не в корне                                                                    |
 | `is_dev`              | `'true'`                              | `'false'` → прод-стек `<app>` вместо `<app>-dev`                                           |
-| `target`              | —                                     | `SUBDOMAIN:SERVICE:PORT` для Traefik (пусто = headless)                                    |
+| `target`              | —                                     | `SUBDOMAIN:SERVICE:PORT` для Nginx Proxy Manager (пусто = headless)                        |
 | `monitor`             | `'false'`                             | `'true'` → все сервисы в сеть монитора + `OTEL_EXPORTER_OTLP_ENDPOINT` (OTLP логи/метрики) |
 | `monitor_network`     | `monitor_default`                     | внешняя сеть монитора (нужен `monitor: 'true'`)                                            |
 | `monitor_endpoint`    | `otel-collector:4318`                 | OTLP HTTP-эндпоинт как `OTEL_EXPORTER_OTLP_ENDPOINT` (нужен `monitor: 'true'`)             |

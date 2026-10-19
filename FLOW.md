@@ -17,12 +17,13 @@
 3. **Центральный пайплайн (`deploy.yml`)**:
    - Валидация входных параметров (принадлежность к `wlgdev`, regex-проверка имени, корректность SHA, валидация формата `target`).
    - Скачивание репозитория проекта на указанном коммите.
-   - Если задан `target`: генерация `docker-compose.override.yml` с лейблами Traefik (Host-правило, TLS, выпуск сертификата Let's Encrypt).
+   - Если задан `target`: генерация `docker-compose.override.yml` — сервисы из `target` подключаются к внешней сети `proxy-network` с DNS-алиасами `<стек>-<сервис>`.
    - Подключение по SSH к серверу под пользователем `deploy`.
    - Создание директории `/data/apps/<app>-dev`.
    - Загрузка `docker-compose.yml.new` и атомарная замена на `docker-compose.yml`.
-   - Если передан `target`: загрузка `docker-compose.override.yml.new` → `mv` в `docker-compose.override.yml`; после перезапуска стека — создание Docker-сети `proxy-<app>-dev-network` и подключение к ней контейнера `coolify-proxy`.
-   - Если `target` не передан: удаление `docker-compose.override.yml`, отключение `coolify-proxy` и удаление прокси-сети после перезапуска стека (чистый headless-деплой, мусор не остаётся).
+   - Если передан `target`: загрузка `docker-compose.override.yml.new` → `mv` в `docker-compose.override.yml`; перед стартом стека проверяется, что сеть `proxy-network` существует.
+   - Синхронизация proxy hosts в Nginx Proxy Manager по SSH: создание/обновление/удаление хостов `<поддомен>.dev.wlg.tv`, выпуск сертификата Let's Encrypt при первом создании, состояние — в `/data/apps/<стек>/.npm-hosts`.
+   - Если `target` не передан: удаление `docker-compose.override.yml` и proxy hosts этого стека в NPM (чистый headless-деплой, мусор не остаётся).
    - Экспорт переменных окружения в текущую сессию.
    - Выполнение `docker compose pull && docker compose up -d --remove-orphans && docker image prune -f && docker image prune -a -f --filter "until=168h"`.
 4. **Завершение**:

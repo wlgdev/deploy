@@ -1,5 +1,5 @@
 name: deploy to wlgdev server
-description: "Triggers a deploy in wlgdev/deploy (headless, or Traefik-routed when target is set) and waits for its result. Records a DEV/PRODUCTION GitHub deployment (caller workflow needs permissions: deployments write). Caller repo needs DEPLOY_TRIGGER_PAT secret (fine-grained PAT, Actions write on wlgdev/deploy)."
+description: "Triggers a deploy in wlgdev/deploy (headless, or Nginx-Proxy-Manager-routed when target is set) and waits for its result. Records a DEV/PRODUCTION GitHub deployment (caller workflow needs permissions: deployments write). Caller repo needs DEPLOY_TRIGGER_PAT secret (fine-grained PAT, Actions write on wlgdev/deploy)."
 
 inputs:
   pat:
@@ -28,7 +28,7 @@ inputs:
   target:
     required: false
     default: ''
-    description: 'SUBDOMAIN:SERVICE:PORT lines for Traefik routing (leave empty for headless deploy)'
+    description: 'SUBDOMAIN:SERVICE:PORT lines for Nginx Proxy Manager routing (leave empty for headless deploy)'
   monitor:
     required: false
     default: 'false'
@@ -56,7 +56,7 @@ runs:
         # --- DEV vs PRODUCTION label in the repo Deployments section ---
         if [ "$IS_DEV" = "true" ]; then ENV_NAME="DEV"; else ENV_NAME="PRODUCTION"; fi
 
-        # --- "View deployment" button: first traefik route, if any ---
+        # --- "View deployment" button: first proxy route, if any ---
         ENV_URL=""
         FIRST_LINE="$(printf '%s' "$TARGET_IN" | grep -v '^[[:space:]]*$' | head -1 || true)"
         if [ -n "$FIRST_LINE" ]; then
@@ -237,7 +237,7 @@ runs:
             echo "- Central run: not found (dispatch may have failed)"
           fi
           if [ -n "${WLG_TARGET:-}" ]; then
-            echo "- Traefik target:"
+            echo "- Nginx Proxy Manager target:"
             echo '```'
             echo "$WLG_TARGET"
             echo '```'
