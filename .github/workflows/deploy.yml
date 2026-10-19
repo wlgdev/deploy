@@ -481,7 +481,7 @@ jobs:
               [ -z "$domain" ] && continue
               if ! awk -v d="$domain" '$1 == d { found = 1 } END { exit !found }' "$NEXT"; then
                 echo "🗑️  $domain — больше не в target, удаляем хост"
-                "$NPM" --host-delete "$id"
+                "$NPM" --host-delete "$id" -y
               fi
             done < "$STATE"
           fi
