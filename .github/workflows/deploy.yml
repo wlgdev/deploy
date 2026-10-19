@@ -461,7 +461,7 @@ jobs:
             cert="$(host_field "$domain" certificate_id)"
             if [ -z "$cert" ] || [ "$cert" = '0' ]; then
               echo "🔐 $domain: выпускаем сертификат"
-              "$NPM" --cert-generate "$domain"
+              "$NPM" --cert-generate "$domain" -y
               cert_id="$(npm_json --cert-list | jq -r --arg d "$domain" 'first(.[] | select(.domain_names | index($d)) | .id) // empty')"
               "$NPM" --host-ssl-enable "$id" "$cert_id"
             fi
