@@ -67,6 +67,7 @@ jobs:
           PAYLOAD="$(jq -r '.inputs.env // empty' "$GITHUB_EVENT_PATH")"
           if [ -z "$PAYLOAD" ]; then
             echo "::warning::no env payload in event — values stay unmasked in logs"
+            echo "event payload keys: $(jq -c 'paths(scalars) | map(tostring) | join(".")' "$GITHUB_EVENT_PATH" | head -20 | tr '\n' ' ')"
             exit 0
           fi
           while IFS='=' read -r k v || [ -n "$k" ]; do
