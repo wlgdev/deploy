@@ -57,6 +57,22 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: 🔒 Mask env values
+        run: |
+          set -eu
+
+          # env приходит обычным input-ом workflow_dispatch, а не секретом — GitHub не маскирует
+          # его значения в логах центрального репозитория. Берём их из payload события, а не из
+          # env/script: иначе значения попали бы в лог ещё до маскирования.
+          PAYLOAD="$(jq -r '.inputs.env // empty' "$GITHUB_EVENT_PATH")"
+          if [ -z "$PAYLOAD" ]; then
+            echo "::warning::no env payload in event — values stay unmasked in logs"
+            exit 0
+          fi
+          while IFS='=' read -r k v || [ -n "$k" ]; do
+            case "$k" in ''|\#*) ;; *) [ -n "$v" ] && echo "::add-mask::$v";; esac
+          done <<< "$PAYLOAD"
+
       - name: 🔍 Validate inputs
         env:
           REPO: ${{ inputs.repo }}
@@ -353,7 +369,8 @@ jobs:
           $SSH "$REMOTE" "cd /data/apps/$APP \
             && docker image prune -f \
             && docker image prune -a -f --filter \"until=168h\""
-          PS_OUT="$($SSH "$REMOTE" "cd /data/apps/$APP && docker compose ps")"
+          # --- status via docker labels: compose ps would re-interpolate the file and need the vars ---
+          PS_OUT="$($SSH "$REMOTE" "docker ps -a --filter label=com.docker.compose.project=$APP --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'")"
           echo "$PS_OUT"
           {
             echo ""
