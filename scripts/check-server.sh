@@ -9,7 +9,7 @@
 #   sudo -u deploy docker ps | head -3
 #   sudo -u deploy docker compose version
 #   sudo -u deploy grep -q ghcr.io /home/deploy/.docker/config.json && echo GHCR_OK
-#   docker network inspect proxy-network >/dev/null && echo PROXY_NET_OK
+#   sudo -u deploy docker ps --format '{{.Names}} {{.Image}}' | grep -i nginx-proxy-manager && echo NPM_OK
 #   sudo -u deploy test -s /home/deploy/wlgdev/npm-api.conf && echo NPM_CONF_OK
 #   curl -sf http://127.0.0.1:81/api/ >/dev/null && echo NPM_API_OK
 set -eu
@@ -22,8 +22,9 @@ need "/data/apps owned by deploy"     "[ \"\$(stat -c %U /data/apps)\" = deploy 
 need "deploy authorized_keys present" "[ -s /home/deploy/.ssh/authorized_keys ]"
 need "docker works for deploy"       "sudo -u deploy docker ps"
 need "compose plugin for deploy"     "sudo -u deploy docker compose version"
+need "compose >= 2.24 for deploy"    "[ \"\$(docker compose version --short | sed 's/^v//' | awk -F. '{print \$1*100+\$2}')\" -ge 224 ]"
 need "ghcr.io auth for deploy"       "grep -q ghcr.io /home/deploy/.docker/config.json"
-need "proxy network for deploy"      "docker network inspect proxy-network"
+need "NPM container present"         "docker ps --format '{{.Names}} {{.Image}}' | grep -qi nginx-proxy-manager"
 need "NPM credentials for deploy"    "sudo -u deploy test -s /home/deploy/wlgdev/npm-api.conf"
 need "NPM admin API reachable"       "curl -sf http://127.0.0.1:81/api/"
 

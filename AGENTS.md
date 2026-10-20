@@ -22,6 +22,9 @@
    В workflow нужны `permissions: contents:read, packages:write, actions:write, deployments:write` (последнее — для раздела Deployments: `DEV`/`PRODUCTION`).
    Dockerfile не в корне — передай `dockerfile: 'docker/Dockerfile'` (контекст всегда корень репо).
 4. Секрет `DEPLOY_TRIGGER_PAT` в настройках репо (выдаёт мейнтейнер `wlgdev/deploy`).
+5. Порты из compose наружу не публикуются (деплой обнуляет `ports`): наружу торчит только
+   Nginx Proxy Manager, доступ к приложению — по домену или изнутри стека. Писать `ports` можно,
+   но смысла нет — и не снимай `expose`, если он нужен для связи между сервисами.
 
 ## Дев: push → стек `<app>-dev`
 

@@ -126,8 +126,15 @@ jobs:
             done <<< "$TARGET"
           fi
 
-          [ "$IS_DEV" = "true" ] && APP="$APP-dev"
+          # --- stack name (dir, compose project, container prefix) and its own network ---
+          if [ "$IS_DEV" = "true" ]; then
+            STACK_NETWORK="proxy-dev-${APP}-network"
+            APP="${APP}-dev"
+          else
+            STACK_NETWORK="proxy-${APP}-network"
+          fi
           echo "APP=$APP" >> "$GITHUB_ENV"
+          echo "STACK_NETWORK=$STACK_NETWORK" >> "$GITHUB_ENV"
           echo -e "\033[1;32m✅ inputs OK → stack: $APP, commit: ${SHA:0:7}\033[0m"
 
           # --- summary: what is being deployed ---
@@ -157,6 +164,7 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| Stack | \`$APP\` |"
+            echo "| Network | \`$STACK_NETWORK\` |"
             echo "| Commit | [\`${SHA:0:7}\`]($SERVER_URL/$REPO/commit/$SHA) |"
             echo "| Image | \`$IMAGE\` |"
             echo "| Routes | $ROUTES |"
@@ -172,47 +180,53 @@ jobs:
           path: app
 
       - name: 🌐 Generate compose override
-        if: ${{ inputs.target != '' || inputs.monitor == 'true' }}
         env:
           APP: ${{ env.APP }}
-          IS_DEV: ${{ inputs.is_dev }}
+          STACK_NETWORK: ${{ env.STACK_NETWORK }}
           TARGET: ${{ inputs.target }}
           MONITOR: ${{ inputs.monitor }}
           MONITOR_NETWORK: ${{ inputs.monitor_network }}
           MONITOR_ENDPOINT: ${{ inputs.monitor_endpoint }}
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
-          PROXY_NETWORK: proxy-network
           ENV_INPUT: ${{ inputs.env }}
         run: |
           set -eu
 
-          echo "PROXY_NETWORK=$PROXY_NETWORK" >> "$GITHUB_ENV"
-
-          # --- pyyaml for reading service names out of the caller compose ---
+          # --- pyyaml for reading the caller compose ---
           python3 -c "import yaml" 2>/dev/null || pip install -q pyyaml
 
-          # --- build docker-compose.override.yml from target lines + monitor block ---
+          # --- build docker-compose.override.yml: stack network + aliases, monitor block, port reset ---
           python3 - << 'EOF'
           import os, sys
           import yaml
+
+          class Loader(yaml.SafeLoader):
+              pass
+          Loader.add_multi_constructor("!", lambda loader, suffix, node: None)
 
           target = os.environ.get("TARGET", "").strip()
           monitor = os.environ.get("MONITOR") == "true"
 
           app = os.environ["APP"]
-          proxy_network = os.environ["PROXY_NETWORK"]
+          stack_network = os.environ["STACK_NETWORK"]
 
-          networks = []      # external net names, in order
-          svc_nets = {}      # service -> [extra nets]
-          svc_alias = {}     # service -> [dns aliases on the proxy network]
-          svc_env = {}       # service -> [KEY=VALUE strings]
+          with open(os.path.join("app", os.environ["COMPOSE_PATH"]), encoding="utf-8") as f:
+              base = yaml.load(f, Loader=Loader) or {}
+
+          services = base.get("services") or {}
+
+          nets = []      # external net names, in order
+          svc = {}       # service -> {nets, aliases, env, reset}
+
+          def entry(service):
+              return svc.setdefault(service, {"nets": [], "aliases": [], "env": [], "reset": False})
 
           def attach(service, net):
-              if net not in networks:
-                  networks.append(net)
-              svc_nets.setdefault(service, [])
-              if net not in svc_nets[service]:
-                  svc_nets[service].append(net)
+              e = entry(service)
+              if net not in nets:
+                  nets.append(net)
+              if net not in e["nets"]:
+                  e["nets"].append(net)
 
           for line in target.splitlines():
               line = line.strip()
@@ -223,48 +237,60 @@ jobs:
                   sys.exit(f"Invalid target entry: {line}")
               subdomain, service, port = parts
               subdomain = subdomain.removesuffix(".dev.wlg.tv").removesuffix(".wlg.tv")
-              attach(service, proxy_network)
-              aliases = svc_alias.setdefault(service, [])
+              attach(service, stack_network)
               alias = f"{app}-{service}"
-              if alias not in aliases:
-                  aliases.append(alias)
+              if alias not in entry(service)["aliases"]:
+                  entry(service)["aliases"].append(alias)
 
           if monitor:
               mnet = os.environ["MONITOR_NETWORK"]
               mep = os.environ["MONITOR_ENDPOINT"]
-              with open(os.path.join("app", os.environ["COMPOSE_PATH"]), encoding="utf-8") as f:
-                  base = yaml.safe_load(f) or {}
-              names = list((base.get("services") or {}).keys())
-              if not names:
+              if not services:
                   sys.exit("monitor is on but no services found in compose")
-              for service in names:
+              for service in services:
                   attach(service, mnet)
-                  svc_env.setdefault(service, []).append(f"OTEL_EXPORTER_OTLP_ENDPOINT={mep}")
+                  entry(service)["env"].append(f"OTEL_EXPORTER_OTLP_ENDPOINT={mep}")
+
+          for service, spec in services.items():
+              if (spec or {}).get("ports"):
+                  entry(service)["reset"] = True
 
           def emit(path, with_monitor):
               mnet = os.environ.get("MONITOR_NETWORK", "")
-              nets = [n for n in networks if with_monitor or n != mnet]
-              lines = ["networks:"]
-              for net in nets:
-                  lines += [f"  {net}:", "    external: true"]
-              lines += ["services:"]
-              any_svc = False
-              for service, extra in svc_nets.items():
-                  extra = [n for n in extra if with_monitor or n != mnet]
-                  envs = svc_env.get(service, []) if with_monitor else []
-                  if not extra and not envs:
+              use_nets = [n for n in nets if with_monitor or n != mnet]
+              lines = []
+              if use_nets:
+                  lines.append("networks:")
+                  for net in use_nets:
+                      lines += [f"  {net}:", "    external: true"]
+              blocks = []
+              for service, e in svc.items():
+                  use = [n for n in e["nets"] if with_monitor or n != mnet]
+                  envs = e["env"] if with_monitor else []
+                  if not use and not envs and not e["reset"]:
                       continue
-                  any_svc = True
-                  lines += [f"  {service}:", "    networks:"]
-                  for n in extra:
-                      lines += [f"      {n}:"]
-                      if n == proxy_network:
-                          aliases = svc_alias.get(service, [])
-                          lines += ["        aliases:"] + [f"          - \"{a}\"" for a in aliases]
+                  block = [f"  {service}:"]
+                  if use:
+                      block.append("    networks:")
+                      for n in use:
+                          block.append(f"      {n}:")
+                          if n == stack_network and e["aliases"]:
+                              block.append("        aliases:")
+                              block += [f"          - \"{a}\"" for a in e["aliases"]]
                   if envs:
-                      lines += ["    environment:"] + [f"      - {e}" for e in envs]
+                      block.append("    environment:")
+                      block += [f"      - {x}" for x in envs]
+                  if e["reset"]:
+                      block.append("    ports: !reset []")
+                  blocks.append(block)
+              if blocks:
+                  if lines:
+                      lines.append("")
+                  lines.append("services:")
+                  for block in blocks:
+                      lines += block
               with open(path, "w", encoding="utf-8") as f:
-                  if nets or any_svc:
+                  if lines:
                       f.write("\n".join(lines) + "\n")
 
           emit("docker-compose.override.yml", True)
@@ -273,6 +299,9 @@ jobs:
               emit("docker-compose.override.fallback.yml", False)
           EOF
           echo "📄 docker-compose.override.yml generated"
+
+          # --- nothing to override: drop the file, an empty one is not a valid compose document ---
+          if [ ! -s docker-compose.override.yml ]; then rm -f docker-compose.override.yml docker-compose.override.fallback.yml; fi
 
           # --- merged files must parse before they reach the server ---
           # compose may declare required variables (${VAR:?message}); they arrive with the env
@@ -299,7 +328,7 @@ jobs:
           TARGET: ${{ inputs.target }}
           MONITOR: ${{ inputs.monitor }}
           MONITOR_NETWORK: ${{ inputs.monitor_network }}
-          PROXY_NETWORK: ${{ env.PROXY_NETWORK }}
+          STACK_NETWORK: ${{ env.STACK_NETWORK }}
         run: |
           set -eu
 
@@ -313,13 +342,6 @@ jobs:
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
           SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=yes"
           REMOTE="$SSH_USER@$SSH_HOST"
-
-          # --- proxy network must exist: the stack cannot be attached to a missing external net ---
-          if [ -n "$TARGET" ]; then
-            $SSH "$REMOTE" "docker network inspect \"$PROXY_NETWORK\" >/dev/null 2>&1" \
-              || { echo "::error::docker network $PROXY_NETWORK not found on the server — routing needs it"; exit 1; }
-            echo "🔗 proxy network $PROXY_NETWORK OK"
-          fi
 
           # --- override pick: full monitor variant, or no-monitor fallback ---
           # (a missing monitor network must never block the app deploy)
@@ -353,14 +375,65 @@ jobs:
           echo "📄 compose uploaded → /data/apps/$APP/docker-compose.yml"
 
           # --- swap files, export secrets, (re)start the stack ---
+          HAS_TARGET=no
+          if [ -n "$TARGET" ]; then HAS_TARGET=yes; fi
+          $SSH "$REMOTE" "APP='$APP' NET='$STACK_NETWORK' HAS_TARGET='$HAS_TARGET' bash -s" <<'REMOTE_SCRIPT'
+          set -eu
+
+          cd "/data/apps/$APP"
+
+          npm_container() {
+            docker ps --format '{{.Names}} {{.Image}}' | awk 'tolower($2) ~ /nginx-proxy-manager/ {print $1; exit}'
+          }
+
+          # --- preflight: routing needs the proxy container, port reset needs compose >= 2.24 ---
+          if [ "$HAS_TARGET" = "yes" ]; then
+            NPM="$(npm_container)"
+            [ -n "$NPM" ] || { echo "::error::NPM container not found on the server — routing needs it"; exit 1; }
+          fi
+          if grep -q '!reset' docker-compose.override.yml.new 2>/dev/null; then
+            COMPOSE_V="$(docker compose version --short | sed 's/^v//' | awk -F. '{print $1*100+$2}')"
+            [ "$COMPOSE_V" -ge 224 ] || { echo "::error::server compose $COMPOSE_V is too old (need >= 2.24)"; exit 1; }
+          fi
+
           # ponytail: secrets live only in this session env, never on disk (values must not contain newlines)
-          $SSH "$REMOTE" "cd /data/apps/$APP \
-            && rm -f .env \
-            && mv docker-compose.yml.new docker-compose.yml \
-            && if [ -f docker-compose.override.yml.new ]; then mv docker-compose.override.yml.new docker-compose.override.yml; else rm -f docker-compose.override.yml; fi \
-            && if [ -f .env.tmp ]; then while IFS='=' read -r k v || [ -n \"\$k\" ]; do case \"\$k\" in ''|\#*) ;; *) export \"\$k=\$v\";; esac; done < .env.tmp; rm -f .env.tmp; fi \
-            && docker compose pull \
-            && docker compose up -d --remove-orphans"
+          rm -f .env
+          mv docker-compose.yml.new docker-compose.yml
+          if [ -f docker-compose.override.yml.new ]; then
+            mv docker-compose.override.yml.new docker-compose.override.yml
+          else
+            rm -f docker-compose.override.yml
+          fi
+          if [ -f .env.tmp ]; then
+            while IFS='=' read -r k v || [ -n "$k" ]; do
+              case "$k" in ''|\#*) ;; *) export "$k=$v";; esac
+            done < .env.tmp
+            rm -f .env.tmp
+          fi
+
+          # --- containers of a foreign compose project under the same name prefix: leftovers, not ours ---
+          docker ps -a --filter "name=^${APP}-" --format '{{.ID}} {{.Label "com.docker.compose.project"}}' \
+            | awk -v p="$APP" '$2 != p && index($2, p "-") != 1 {print $1}' | xargs -r docker rm -f
+
+          # --- the stack network: only the proxy and the target services live in it ---
+          if [ "$HAS_TARGET" = "yes" ]; then
+            docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET"
+            docker inspect -f '{{json .NetworkSettings.Networks}}' "$NPM" | grep -q "\"$NET\"" || docker network connect "$NET" "$NPM"
+            echo "🔗 network $NET ready"
+          fi
+
+          docker compose pull
+          docker compose up -d --remove-orphans
+
+          # --- headless stack: the proxy has no business inside the stack network ---
+          if [ "$HAS_TARGET" != "yes" ] && docker network inspect "$NET" >/dev/null 2>&1; then
+            NPM="$(npm_container)"
+            if [ -n "$NPM" ]; then
+              docker network disconnect "$NET" "$NPM" 2>/dev/null || true
+            fi
+            docker network rm "$NET" 2>/dev/null || true
+          fi
+          REMOTE_SCRIPT
 
           # --- drop old images, show + record status ---
           $SSH "$REMOTE" "cd /data/apps/$APP \
