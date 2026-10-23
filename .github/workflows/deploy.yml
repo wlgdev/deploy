@@ -186,7 +186,7 @@ jobs:
 
           base_app = repo.split("/", maxsplit=1)[-1]
           env_name = "dev" if is_dev else "prod"
-          log_labels = "app,env,service,repo,image,version"
+          log_labels = "compose,env,container,repo,image,version"
 
           def subst(text):
               def repl(m):
@@ -218,7 +218,7 @@ jobs:
               if isinstance(user_labels, list):
                   user_labels = {x.split("=", 1)[0]: x.split("=", 1)[1] for x in user_labels}
               image, version = service_image(spec)
-              user_labels.update({"app": base_app, "env": env_name, "service": service,
+              user_labels.update({"compose": base_app, "env": env_name, "container": service,
                                   "repo": repo, "image": image, "version": version})
               e = {"nets": [], "aliases": [], "labels": user_labels, "reset": bool(spec.get("ports"))}
               svc[service] = e

@@ -17,7 +17,7 @@
 3. **Центральный пайплайн (`deploy.yml`)**:
    - Валидация входных параметров (принадлежность к `wlgdev`, regex-проверка имени, корректность SHA, валидация формата `target`).
    - Скачивание репозитория проекта на указанном коммите.
-   - Генерация `docker-compose.override.yml`: лейблы логов (`app`, `env`, `service`, `repo`, `image`, `version` + `logging.options.labels`) для всех сервисов, сеть стека `proxy-<стек>-network` (dev: `proxy-dev-<стек>-network`) с DNS-алиасами `<стек>-<сервис>` для сервисов из `target` и `ports: !reset []` для сервисов с опубликованными портами.
+   - Генерация `docker-compose.override.yml`: лейблы логов (`compose`, `env`, `container`, `repo`, `image`, `version` + `logging.options.labels`) для всех сервисов, сеть стека `proxy-<стек>-network` (dev: `proxy-dev-<стек>-network`) с DNS-алиасами `<стек>-<сервис>` для сервисов из `target` и `ports: !reset []` для сервисов с опубликованными портами.
    - Подключение по SSH к серверу под пользователем `deploy`.
    - Создание директории `/data/apps/<app>-dev`.
    - Загрузка `docker-compose.yml.new` и атомарная замена на `docker-compose.yml`.
