@@ -32,22 +32,7 @@ on:
         required: false
         default: ''
         type: string
-      monitor:
-        description: "'true' = attach services to monitor network and inject OTEL_EXPORTER_OTLP_ENDPOINT"
-        required: false
-        default: 'false'
-        type: choice
-        options: ['false', 'true']
-      monitor_network:
-        description: 'External Docker network of the monitor stack'
-        required: false
-        default: 'monitor_default'
-        type: string
-      monitor_endpoint:
-        description: 'OTLP HTTP endpoint injected as OTEL_EXPORTER_OTLP_ENDPOINT'
-        required: false
-        default: 'otel-collector:4318'
-        type: string
+
 
 concurrency:
   group: deploy-${{ inputs.repo }}-${{ inputs.is_dev }}
@@ -77,9 +62,6 @@ jobs:
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           IS_DEV: ${{ inputs.is_dev }}
           TARGET: ${{ inputs.target }}
-          MONITOR: ${{ inputs.monitor }}
-          MONITOR_NETWORK: ${{ inputs.monitor_network }}
-          MONITOR_ENDPOINT: ${{ inputs.monitor_endpoint }}
           ENV_INPUT: ${{ inputs.env }}
           SERVER_URL: ${{ github.server_url }}
         run: |
@@ -93,20 +75,6 @@ jobs:
           [ "${#SHA}" -eq 40 ] || { echo "::error::sha must be full 40-char"; exit 1; }
           case "$COMPOSE_PATH" in ''|*..*|/*) echo "::error::bad docker_compose_path"; exit 1;; esac
           case "$IS_DEV" in true|false) ;; *) echo "::error::is_dev must be true/false"; exit 1;; esac
-          case "$MONITOR" in true|false) ;; *) echo "::error::monitor must be true/false"; exit 1;; esac
-
-          # --- monitor network + endpoint (only when monitor is on) ---
-          #if [ "$MONITOR" = "true" ]; then
-          #  case "$MONITOR_NETWORK" in ''|*[!a-zA-Z0-9_-]*) echo "::error::bad monitor_network"; exit 1;; esac
-          #  case "$MONITOR_ENDPOINT" in *:*) ;; *) echo "::error::monitor_endpoint must be host:port"; exit 1;; esac
-          #  case "$MONITOR_ENDPOINT" in *[!a-zA-Z0-9.:\_-]*) echo "::error::bad characters in monitor_endpoint"; exit 1;; esac
-          #  MON_EP_PORT="${MONITOR_ENDPOINT##*:}"
-          #  case "$MON_EP_PORT" in *[!0-9]*|'') echo "::error::monitor_endpoint port must be numeric"; exit 1;; esac
-          #  if [ "$MON_EP_PORT" -lt 1 ] || [ "$MON_EP_PORT" -gt 65535 ]; then
-          #    echo "::error::monitor_endpoint port out of range: $MON_EP_PORT"; exit 1
-          #  fi
-          #fi
-
           # --- target lines: SUBDOMAIN:SERVICE:PORT ---
           if [ -n "$TARGET" ]; then
             while IFS= read -r line || [ -n "$line" ]; do
@@ -153,11 +121,6 @@ jobs:
               printf 'https://%s.%s<br>' "$sub" "$SUFFIX"
             done <<< "$TARGET")"
           fi
-          if [ "$MONITOR" = "true" ]; then
-            MONITOR_TXT="\`$MONITOR_NETWORK → $MONITOR_ENDPOINT\`"
-          else
-            MONITOR_TXT="— (off)"
-          fi
           {
             echo "## 🚀 Deploy \`$REPO\`"
             echo ""
@@ -168,7 +131,6 @@ jobs:
             echo "| Commit | [\`${SHA:0:7}\`]($SERVER_URL/$REPO/commit/$SHA) |"
             echo "| Image | \`$IMAGE\` |"
             echo "| Routes | $ROUTES |"
-            echo "| Monitor | $MONITOR_TXT |"
             echo "| Path | \`/data/apps/$APP\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -184,20 +146,19 @@ jobs:
           APP: ${{ env.APP }}
           STACK_NETWORK: ${{ env.STACK_NETWORK }}
           TARGET: ${{ inputs.target }}
-          MONITOR: ${{ inputs.monitor }}
-          MONITOR_NETWORK: ${{ inputs.monitor_network }}
-          MONITOR_ENDPOINT: ${{ inputs.monitor_endpoint }}
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           ENV_INPUT: ${{ inputs.env }}
+          REPO: ${{ inputs.repo }}
+          IS_DEV: ${{ inputs.is_dev }}
         run: |
           set -eu
 
           # --- pyyaml for reading the caller compose ---
           python3 -c "import yaml" 2>/dev/null || pip install -q pyyaml
 
-          # --- build docker-compose.override.yml: stack network + aliases, monitor block, port reset ---
+          # --- build docker-compose.override.yml: log labels, stack network + aliases, port reset ---
           python3 - << 'EOF'
-          import os, sys
+          import os, re, sys
           import yaml
 
           class Loader(yaml.SafeLoader):
@@ -205,28 +166,73 @@ jobs:
           Loader.add_multi_constructor("!", lambda loader, suffix, node: None)
 
           target = os.environ.get("TARGET", "").strip()
-          monitor = os.environ.get("MONITOR") == "true"
-
           app = os.environ["APP"]
+          repo = os.environ["REPO"]
+          is_dev = os.environ.get("IS_DEV") == "true"
           stack_network = os.environ["STACK_NETWORK"]
+
+          env = {}
+          for line in os.environ.get("ENV_INPUT", "").splitlines():
+              k, sep, v = line.partition("=")
+              if sep and k.strip():
+                  env[k.strip()] = v
 
           with open(os.path.join("app", os.environ["COMPOSE_PATH"]), encoding="utf-8") as f:
               base = yaml.load(f, Loader=Loader) or {}
 
           services = base.get("services") or {}
+          if not services:
+              sys.exit("no services found in compose")
+
+          base_app = repo.split("/", maxsplit=1)[-1]
+          env_name = "dev" if is_dev else "prod"
+          log_labels = "app,env,service,repo,image,version"
+
+          def subst(text):
+              def repl(m):
+                  key = m.group(1) or m.group(2)
+                  return env.get(key, m.group(0))
+              return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", repl, text)
+
+          def split_image(ref):
+              colon, slash = ref.rfind(":"), ref.rfind("/")
+              if colon > slash:
+                  return ref[:colon], ref[colon + 1:]
+              return ref, ""
+
+          def service_image(spec):
+              raw = (spec or {}).get("image")
+              resolved = subst(str(raw)) if raw else ""
+              if not resolved or "${" in resolved:
+                  return env.get("SERVICE_IMAGE_NAME", ""), env.get("SERVICE_IMAGE_TAG", "")
+              return split_image(resolved)
 
           nets = []      # external net names, in order
-          svc = {}       # service -> {nets, aliases, env, reset}
+          svc = {}       # service -> {nets, aliases, labels, reset}
 
-          def entry(service):
-              return svc.setdefault(service, {"nets": [], "aliases": [], "env": [], "reset": False})
+          def svc_entry(service):
+              if service in svc:
+                  return svc[service]
+              spec = services.get(service) or {}
+              user_labels = spec.get("labels") or {}
+              if isinstance(user_labels, list):
+                  user_labels = {x.split("=", 1)[0]: x.split("=", 1)[1] for x in user_labels}
+              image, version = service_image(spec)
+              user_labels.update({"app": base_app, "env": env_name, "service": service,
+                                  "repo": repo, "image": image, "version": version})
+              e = {"nets": [], "aliases": [], "labels": user_labels, "reset": bool(spec.get("ports"))}
+              svc[service] = e
+              return e
 
           def attach(service, net):
-              e = entry(service)
+              e = svc_entry(service)
               if net not in nets:
                   nets.append(net)
               if net not in e["nets"]:
                   e["nets"].append(net)
+
+          for service in services:
+              svc_entry(service)
 
           for line in target.splitlines():
               line = line.strip()
@@ -239,69 +245,44 @@ jobs:
               subdomain = subdomain.removesuffix(".dev.wlg.tv").removesuffix(".wlg.tv")
               attach(service, stack_network)
               alias = f"{app}-{service}"
-              if alias not in entry(service)["aliases"]:
-                  entry(service)["aliases"].append(alias)
+              aliases = svc_entry(service)["aliases"]
+              if alias not in aliases:
+                  aliases.append(alias)
 
-          if monitor:
-              mnet = os.environ["MONITOR_NETWORK"]
-              mep = os.environ["MONITOR_ENDPOINT"]
-              if not services:
-                  sys.exit("monitor is on but no services found in compose")
-              for service in services:
-                  attach(service, mnet)
-                  entry(service)["env"].append(f"OTEL_EXPORTER_OTLP_ENDPOINT={mep}")
-
-          for service, spec in services.items():
-              if (spec or {}).get("ports"):
-                  entry(service)["reset"] = True
-
-          def emit(path, with_monitor):
-              mnet = os.environ.get("MONITOR_NETWORK", "")
-              use_nets = [n for n in nets if with_monitor or n != mnet]
+          def emit(path):
               lines = []
-              if use_nets:
+              if nets:
                   lines.append("networks:")
-                  for net in use_nets:
+                  for net in nets:
                       lines += [f"  {net}:", "    external: true"]
-              blocks = []
+                  lines.append("")
+              lines.append("services:")
               for service, e in svc.items():
-                  use = [n for n in e["nets"] if with_monitor or n != mnet]
-                  envs = e["env"] if with_monitor else []
-                  if not use and not envs and not e["reset"]:
-                      continue
-                  block = [f"  {service}:"]
-                  if use:
-                      block.append("    networks:")
-                      for n in use:
-                          block.append(f"      {n}:")
+                  lines.append(f"  {service}:")
+                  lines.append("    labels:")
+                  for k, v in e["labels"].items():
+                      lines.append(f'      {k}: "{v}"')
+                  lines.append("    logging:")
+                  lines.append("      options:")
+                  lines.append(f'        labels: "{log_labels}"')
+                  if e["nets"]:
+                      lines.append("    networks:")
+                      for n in e["nets"]:
+                          lines.append(f"      {n}:")
                           if n == stack_network and e["aliases"]:
-                              block.append("        aliases:")
-                              block += [f"          - \"{a}\"" for a in e["aliases"]]
-                  if envs:
-                      block.append("    environment:")
-                      block += [f"      - {x}" for x in envs]
+                              lines.append("        aliases:")
+                              lines += [f'          - "{a}"' for a in e["aliases"]]
                   if e["reset"]:
-                      block.append("    ports: !reset []")
-                  blocks.append(block)
-              if blocks:
-                  if lines:
-                      lines.append("")
-                  lines.append("services:")
-                  for block in blocks:
-                      lines += block
+                      lines.append("    ports: !reset []")
               with open(path, "w", encoding="utf-8") as f:
-                  if lines:
-                      f.write("\n".join(lines) + "\n")
+                  f.write("\n".join(lines) + "\n")
 
-          emit("docker-compose.override.yml", True)
-          if monitor:
-              # no-monitor fallback for when the monitor network is missing on the server
-              emit("docker-compose.override.fallback.yml", False)
+          emit("docker-compose.override.yml")
           EOF
           echo "📄 docker-compose.override.yml generated"
 
           # --- nothing to override: drop the file, an empty one is not a valid compose document ---
-          if [ ! -s docker-compose.override.yml ]; then rm -f docker-compose.override.yml docker-compose.override.fallback.yml; fi
+          if [ ! -s docker-compose.override.yml ]; then rm -f docker-compose.override.yml; fi
 
           # --- merged files must parse before they reach the server ---
           # compose may declare required variables (${VAR:?message}); they arrive with the env
@@ -326,8 +307,6 @@ jobs:
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           ENV_INPUT: ${{ inputs.env }}
           TARGET: ${{ inputs.target }}
-          MONITOR: ${{ inputs.monitor }}
-          MONITOR_NETWORK: ${{ inputs.monitor_network }}
           STACK_NETWORK: ${{ env.STACK_NETWORK }}
         run: |
           set -eu
@@ -343,24 +322,9 @@ jobs:
           SSH="ssh -i ~/.ssh/deploy_key -p $SSH_PORT -o StrictHostKeyChecking=yes"
           REMOTE="$SSH_USER@$SSH_HOST"
 
-          # --- override pick: full monitor variant, or no-monitor fallback ---
-          # (a missing monitor network must never block the app deploy)
+          # --- override: log labels (+proxy network when target is set) ---
           OVERRIDE_SRC=""
           if [ -f docker-compose.override.yml ]; then OVERRIDE_SRC="docker-compose.override.yml"; fi
-          if [ "$MONITOR" = "true" ]; then
-            if $SSH "$REMOTE" "docker network inspect \"$MONITOR_NETWORK\" >/dev/null 2>&1"; then
-              echo "📡 monitor network $MONITOR_NETWORK OK"
-            else
-              echo "::warning::monitor network $MONITOR_NETWORK not found — deploying without monitor attachment"
-              {
-                echo ""
-                echo "### ⚠️ Monitor skipped"
-                echo "Network \`$MONITOR_NETWORK\` not found on server — stack is up without OTLP attachment."
-              } >> "$GITHUB_STEP_SUMMARY"
-              OVERRIDE_SRC=""
-              if [ -s docker-compose.override.fallback.yml ]; then OVERRIDE_SRC="docker-compose.override.fallback.yml"; fi
-            fi
-          fi
 
           # --- upload: compose (+ override) and secrets ---
           $SSH "$REMOTE" "mkdir -p /data/apps/$APP" \
