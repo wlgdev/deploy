@@ -386,6 +386,13 @@ jobs:
             echo "🔗 network $NET ready"
           fi
 
+          # --- optional database backup: fail before any service restart if it fails ---
+          COMPOSE_SERVICES="$(docker compose --profile pre-restart config --services)"
+          if printf '%s\n' "$COMPOSE_SERVICES" | grep -Fxq 'pre-restart-db-backup'; then
+            echo "🗄️ Creating database backup before restart"
+            docker compose --profile pre-restart run --rm --no-deps --no-recreate pre-restart-db-backup
+          fi
+
           docker compose pull
           docker compose up -d --remove-orphans
 
