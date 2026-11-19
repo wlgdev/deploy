@@ -353,7 +353,7 @@ jobs:
           # --- swap files, export secrets, (re)start the stack ---
           HAS_TARGET=no
           if [ -n "$TARGET" ]; then HAS_TARGET=yes; fi
-          $SSH "$REMOTE" "APP='$APP' NET='$STACK_NETWORK' HAS_TARGET='$HAS_TARGET' FORCE_RECREATE_SERVICE='$FORCE_RECREATE_SERVICE' bash -s" <<'REMOTE_SCRIPT'
+          REMOTE_OUTPUT="$( $SSH "$REMOTE" "APP='$APP' NET='$STACK_NETWORK' HAS_TARGET='$HAS_TARGET' FORCE_RECREATE_SERVICE='$FORCE_RECREATE_SERVICE' bash -s" <<'REMOTE_SCRIPT'
           set -eu
 
           cd "/data/apps/$APP"
@@ -407,7 +407,7 @@ jobs:
           BACKUP_BEFORE_RESTART=false
           if printf '%s\n' "$COMPOSE_SERVICES" | grep -Fxq 'pre-restart-db-backup'; then
             echo "🗄️ Creating database backup before restart"
-            docker compose --profile pre-restart run --rm --no-deps pre-restart-db-backup
+            docker compose --profile pre-restart run --rm --no-deps --interactive=false pre-restart-db-backup
             BACKUP_BEFORE_RESTART=true
           fi
 
@@ -419,6 +419,8 @@ jobs:
               || { echo "::error::force_recreate_service is not a service in this Compose file"; exit 1; }
             [ "$BACKUP_BEFORE_RESTART" = true ] \
               || { echo "::error::force_recreate_service requires a successful pre-restart-db-backup service"; exit 1; }
+            FORCE_RECREATE_OLD_IDS="$(docker compose ps -q "$FORCE_RECREATE_SERVICE" || true)"
+            echo "FORCE_RECREATE_SERVICE=$FORCE_RECREATE_SERVICE"
           fi
 
           docker compose pull
@@ -435,6 +437,12 @@ jobs:
               docker compose up -d --wait --remove-orphans --no-deps "$@"
             fi
             docker compose up -d --wait --remove-orphans --force-recreate --no-deps "$FORCE_RECREATE_SERVICE"
+            FORCE_RECREATE_NEW_IDS="$(docker compose ps -q "$FORCE_RECREATE_SERVICE")"
+            [ -n "$FORCE_RECREATE_NEW_IDS" ] \
+              || { echo "::error::force-recreate service is not running after deploy"; exit 1; }
+            [ "$FORCE_RECREATE_NEW_IDS" != "$FORCE_RECREATE_OLD_IDS" ] \
+              || { echo "::error::force-recreate service container ID did not change"; exit 1; }
+            echo "✅ $FORCE_RECREATE_SERVICE recreated"
           else
             docker compose up -d --remove-orphans
           fi
@@ -447,7 +455,16 @@ jobs:
             fi
             docker network rm "$NET" 2>/dev/null || true
           fi
+          echo "REMOTE_DEPLOY_SCRIPT_COMPLETED"
           REMOTE_SCRIPT
+          )"
+          printf '%s\n' "$REMOTE_OUTPUT"
+          printf '%s\n' "$REMOTE_OUTPUT" | grep -Fxq 'REMOTE_DEPLOY_SCRIPT_COMPLETED' \
+            || { echo "::error::remote deploy script did not reach completion"; exit 1; }
+          if [ -n "$FORCE_RECREATE_SERVICE" ]; then
+            printf '%s\n' "$REMOTE_OUTPUT" | grep -Fxq "✅ $FORCE_RECREATE_SERVICE recreated" \
+              || { echo "::error::remote force-recreate service did not report success"; exit 1; }
+          fi
 
           # --- drop old images, show + record status ---
           $SSH "$REMOTE" "cd /data/apps/$APP \
