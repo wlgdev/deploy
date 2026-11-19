@@ -388,13 +388,20 @@ jobs:
 
           # --- optional database backup: fail before any service restart if it fails ---
           COMPOSE_SERVICES="$(docker compose --profile pre-restart config --services)"
+          BACKUP_BEFORE_RESTART=false
           if printf '%s\n' "$COMPOSE_SERVICES" | grep -Fxq 'pre-restart-db-backup'; then
             echo "🗄️ Creating database backup before restart"
             docker compose --profile pre-restart run --rm --no-deps pre-restart-db-backup
+            BACKUP_BEFORE_RESTART=true
           fi
 
           docker compose pull
-          docker compose up -d --remove-orphans
+          if [ "$BACKUP_BEFORE_RESTART" = true ]; then
+            # A declared backup gate opts this stack into a full restart.
+            docker compose up -d --remove-orphans --force-recreate
+          else
+            docker compose up -d --remove-orphans
+          fi
 
           # --- headless stack: the proxy has no business inside the stack network ---
           if [ "$HAS_TARGET" != "yes" ] && docker network inspect "$NET" >/dev/null 2>&1; then
@@ -411,7 +418,7 @@ jobs:
             && docker image prune -f \
             && docker image prune -a -f --filter \"until=168h\""
           # --- status via docker labels: compose ps would re-interpolate the file and need the vars ---
-          PS_OUT="$($SSH "$REMOTE" "docker ps -a --filter label=com.docker.compose.project=$APP --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'")"
+          PS_OUT="$($SSH "$REMOTE" "docker ps -a --filter label=com.docker.compose.project=$APP --format 'table {{.Names}}\t{{.Image}}\t{{.ID}}\t{{.CreatedAt}}\t{{.Status}}\t{{.Ports}}'")"
           echo "$PS_OUT"
           {
             echo ""
