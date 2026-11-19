@@ -29,6 +29,10 @@ inputs:
     required: false
     default: ''
     description: 'SUBDOMAIN:SERVICE:PORT lines for Nginx Proxy Manager routing (leave empty for headless deploy)'
+  force_recreate_service:
+    required: false
+    default: ''
+    description: 'Optional Compose service to force-recreate after other services update; requires a successful pre-restart-db-backup service'
   central_ref:
     required: false
     default: 'main'
@@ -130,8 +134,9 @@ runs:
         curl -sf -X POST -H "Authorization: Bearer $PAT" -H 'Accept: application/vnd.github+json' \
           "https://api.github.com/repos/wlgdev/deploy/actions/workflows/deploy.yml/dispatches" \
           -d "$(jq -n --arg repo "$REPO" --arg sha "$SHA" --arg compose "$COMPOSE_PATH" \
-                        --arg dev "$IS_DEV" --arg env "$ENV_PAYLOAD" --arg target "$TARGET_IN" --arg ref "$CENTRAL_REF" \
-                '{ref:$ref,inputs:{repo:$repo, sha:$sha, docker_compose_path:$compose, is_dev:$dev, env:$env, target:$target}}')"
+                        --arg dev "$IS_DEV" --arg env "$ENV_PAYLOAD" --arg target "$TARGET_IN" \
+                        --arg recreate_service "$FORCE_RECREATE_SERVICE" --arg ref "$CENTRAL_REF" \
+                '{ref:$ref,inputs:{repo:$repo, sha:$sha, docker_compose_path:$compose, is_dev:$dev, env:$env, target:$target, force_recreate_service:$recreate_service}}')"
         echo -e "🚀 dispatch accepted, waiting for central run: $REPO @ ${SHA:0:7} (is_dev=$IS_DEV)"
 
         # --- wait for the central run to appear ---
@@ -170,6 +175,7 @@ runs:
         RELEASE_TAG: ${{ github.event.release.tag_name }}
         ENV_INPUT: ${{ inputs.env }}
         TARGET_IN: ${{ inputs.target }}
+        FORCE_RECREATE_SERVICE: ${{ inputs.force_recreate_service }}
         CENTRAL_REF: ${{ inputs.central_ref }}
 
     - name: 📍 Update GitHub deployment
