@@ -32,11 +32,6 @@ on:
         required: false
         default: ''
         type: string
-      force_recreate_service:
-        description: 'Optional Compose service to force-recreate after other services update; requires a successful pre-restart-db-backup service'
-        required: false
-        default: ''
-        type: string
 
 
 concurrency:
@@ -67,7 +62,6 @@ jobs:
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           IS_DEV: ${{ inputs.is_dev }}
           TARGET: ${{ inputs.target }}
-          FORCE_RECREATE_SERVICE: ${{ inputs.force_recreate_service }}
           ENV_INPUT: ${{ inputs.env }}
           SERVER_URL: ${{ github.server_url }}
         run: |
@@ -81,10 +75,6 @@ jobs:
           [ "${#SHA}" -eq 40 ] || { echo "::error::sha must be full 40-char"; exit 1; }
           case "$COMPOSE_PATH" in ''|*..*|/*) echo "::error::bad docker_compose_path"; exit 1;; esac
           case "$IS_DEV" in true|false) ;; *) echo "::error::is_dev must be true/false"; exit 1;; esac
-          case "$FORCE_RECREATE_SERVICE" in
-            '') ;;
-            *[!a-zA-Z0-9_-]*) echo "::error::bad force_recreate_service"; exit 1 ;;
-          esac
           # --- target lines: SUBDOMAIN:SERVICE:PORT ---
           if [ -n "$TARGET" ]; then
             while IFS= read -r line || [ -n "$line" ]; do
@@ -141,7 +131,6 @@ jobs:
             echo "| Commit | [\`${SHA:0:7}\`]($SERVER_URL/$REPO/commit/$SHA) |"
             echo "| Image | \`$IMAGE\` |"
             echo "| Routes | $ROUTES |"
-            echo "| Force-recreate service | \`${FORCE_RECREATE_SERVICE:-none}\` |"
             echo "| Path | \`/data/apps/$APP\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -318,7 +307,6 @@ jobs:
           COMPOSE_PATH: ${{ inputs.docker_compose_path }}
           ENV_INPUT: ${{ inputs.env }}
           TARGET: ${{ inputs.target }}
-          FORCE_RECREATE_SERVICE: ${{ inputs.force_recreate_service }}
           STACK_NETWORK: ${{ env.STACK_NETWORK }}
         run: |
           set -eu
@@ -353,7 +341,7 @@ jobs:
           # --- swap files, export secrets, (re)start the stack ---
           HAS_TARGET=no
           if [ -n "$TARGET" ]; then HAS_TARGET=yes; fi
-          REMOTE_OUTPUT="$( $SSH "$REMOTE" "APP='$APP' NET='$STACK_NETWORK' HAS_TARGET='$HAS_TARGET' FORCE_RECREATE_SERVICE='$FORCE_RECREATE_SERVICE' bash -s" <<'REMOTE_SCRIPT'
+          $SSH "$REMOTE" "APP='$APP' NET='$STACK_NETWORK' HAS_TARGET='$HAS_TARGET' bash -s" <<'REMOTE_SCRIPT'
           set -eu
 
           cd "/data/apps/$APP"
@@ -370,10 +358,6 @@ jobs:
           if grep -q '!reset' docker-compose.override.yml.new 2>/dev/null; then
             COMPOSE_V="$(docker compose version --short | sed 's/^v//' | awk -F. '{print $1*100+$2}')"
             [ "$COMPOSE_V" -ge 224 ] || { echo "::error::server compose $COMPOSE_V is too old (need >= 2.24)"; exit 1; }
-          fi
-          if [ -n "$FORCE_RECREATE_SERVICE" ]; then
-            COMPOSE_V="$(docker compose version --short | sed 's/^v//' | awk -F. '{print $1*100+$2}')"
-            [ "$COMPOSE_V" -ge 217 ] || { echo "::error::server compose $COMPOSE_V is too old for --wait (need >= 2.17)"; exit 1; }
           fi
 
           # ponytail: secrets live only in this session env, never on disk (values must not contain newlines)
@@ -402,50 +386,8 @@ jobs:
             echo "🔗 network $NET ready"
           fi
 
-          # --- optional database backup: fail before any service restart if it fails ---
-          COMPOSE_SERVICES="$(docker compose --profile pre-restart config --services)"
-          BACKUP_BEFORE_RESTART=false
-          if printf '%s\n' "$COMPOSE_SERVICES" | grep -Fxq 'pre-restart-db-backup'; then
-            echo "🗄️ Creating database backup before restart"
-            docker compose --profile pre-restart run --rm --no-deps --interactive=false pre-restart-db-backup
-            BACKUP_BEFORE_RESTART=true
-          fi
-
-          DEPLOY_SERVICES="$(docker compose config --services)"
-          if [ -n "$FORCE_RECREATE_SERVICE" ]; then
-            [ "$FORCE_RECREATE_SERVICE" != 'pre-restart-db-backup' ] \
-              || { echo "::error::pre-restart-db-backup cannot be force-recreated as an application service"; exit 1; }
-            printf '%s\n' "$DEPLOY_SERVICES" | grep -Fxq "$FORCE_RECREATE_SERVICE" \
-              || { echo "::error::force_recreate_service is not a service in this Compose file"; exit 1; }
-            [ "$BACKUP_BEFORE_RESTART" = true ] \
-              || { echo "::error::force_recreate_service requires a successful pre-restart-db-backup service"; exit 1; }
-            FORCE_RECREATE_OLD_IDS="$(docker compose ps -q "$FORCE_RECREATE_SERVICE" || true)"
-            echo "FORCE_RECREATE_SERVICE=$FORCE_RECREATE_SERVICE"
-          fi
-
           docker compose pull
-          if [ -n "$FORCE_RECREATE_SERVICE" ]; then
-            OTHER_SERVICES="$(printf '%s\n' "$DEPLOY_SERVICES" \
-              | grep -Fxv "$FORCE_RECREATE_SERVICE" \
-              | grep -Fxv 'pre-restart-db-backup' || true)"
-            if [ -n "$OTHER_SERVICES" ]; then
-              set --
-              while IFS= read -r service; do
-                [ -n "$service" ] || continue
-                set -- "$@" "$service"
-              done < <(printf '%s\n' "$OTHER_SERVICES")
-              docker compose up -d --wait --remove-orphans --no-deps "$@"
-            fi
-            docker compose up -d --wait --remove-orphans --force-recreate --no-deps "$FORCE_RECREATE_SERVICE"
-            FORCE_RECREATE_NEW_IDS="$(docker compose ps -q "$FORCE_RECREATE_SERVICE")"
-            [ -n "$FORCE_RECREATE_NEW_IDS" ] \
-              || { echo "::error::force-recreate service is not running after deploy"; exit 1; }
-            [ "$FORCE_RECREATE_NEW_IDS" != "$FORCE_RECREATE_OLD_IDS" ] \
-              || { echo "::error::force-recreate service container ID did not change"; exit 1; }
-            echo "✅ $FORCE_RECREATE_SERVICE recreated"
-          else
-            docker compose up -d --remove-orphans
-          fi
+          docker compose up -d --remove-orphans
 
           # --- headless stack: the proxy has no business inside the stack network ---
           if [ "$HAS_TARGET" != "yes" ] && docker network inspect "$NET" >/dev/null 2>&1; then
@@ -455,23 +397,14 @@ jobs:
             fi
             docker network rm "$NET" 2>/dev/null || true
           fi
-          echo "REMOTE_DEPLOY_SCRIPT_COMPLETED"
           REMOTE_SCRIPT
-          )"
-          printf '%s\n' "$REMOTE_OUTPUT"
-          printf '%s\n' "$REMOTE_OUTPUT" | grep -Fxq 'REMOTE_DEPLOY_SCRIPT_COMPLETED' \
-            || { echo "::error::remote deploy script did not reach completion"; exit 1; }
-          if [ -n "$FORCE_RECREATE_SERVICE" ]; then
-            printf '%s\n' "$REMOTE_OUTPUT" | grep -Fxq "✅ $FORCE_RECREATE_SERVICE recreated" \
-              || { echo "::error::remote force-recreate service did not report success"; exit 1; }
-          fi
 
           # --- drop old images, show + record status ---
           $SSH "$REMOTE" "cd /data/apps/$APP \
             && docker image prune -f \
             && docker image prune -a -f --filter \"until=168h\""
           # --- status via docker labels: compose ps would re-interpolate the file and need the vars ---
-          PS_OUT="$($SSH "$REMOTE" "docker ps -a --filter label=com.docker.compose.project=$APP --format 'table {{.Names}}\t{{.Image}}\t{{.ID}}\t{{.CreatedAt}}\t{{.Status}}\t{{.Ports}}'")"
+          PS_OUT="$($SSH "$REMOTE" "docker ps -a --filter label=com.docker.compose.project=$APP --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'")"
           echo "$PS_OUT"
           {
             echo ""
